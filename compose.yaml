@@ -22,17 +22,19 @@ services:
     command:
       - postgres
       - -c
-      - shared_preload_libraries=''
-      - -c
       - max_connections=200
       - -c
       - log_min_duration_statement=100ms
     environment:
       <<: *postgres-env
     ports:
-      - '127.0.0.1:5432:5432'
+      # HOST POSTGRES_PORT (default 5432) → container 5432. Override in .env when a local PostgreSQL
+      # already owns 5432 (e.g. a native service): set POSTGRES_PORT=5433 and match DATABASE_URL.
+      - '127.0.0.1:${POSTGRES_PORT:-5432}:5432'
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      # postgres:18+ images expect a single mount at /var/lib/postgresql (version-specific
+      # subdirectory inside it); mounting .../data directly makes the 18 image refuse to start.
+      - postgres-data:/var/lib/postgresql
       - ./infra/postgres/init-test-database.sql:/docker-entrypoint-initdb.d/10-init-test-database.sql:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-ticketflow} -d ${POSTGRES_DB:-ticketflow}']

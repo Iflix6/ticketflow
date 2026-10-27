@@ -1,0 +1,92 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Fresh-clone reproduction: install → build → typecheck → lint → unit → migrate → seed →
+# integration (real PostgreSQL service container) → invariants. No step claims a result the
+# runner did not actually produce; `verify` is the same chain, locally.
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci_only_password
+          POSTGRES_DB: ci_main
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci -d ci_main"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://ci:ci_only_password@localhost:5432/ci_main
+      REDIS_URL: redis://localhost:6379
+      # Repo-level fallback is a CI-only value (NODE_ENV=ci, ephemeral containers). Configure the
+      # repository secret to exercise the real-secret path; production startup refuses values like this.
+      AUTH_SECRET: ${{ secrets.CI_AUTH_SECRET || 'ci_only_placeholder_secret_change_me_32chars' }}
+      NODE_ENV: ci
+      LOG_LEVEL: warn
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install (npm workspaces — the documented package manager choice, ADR-0008)
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Typecheck (strict)
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm run test:unit
+
+      - name: Migrations on a fresh database
+        run: npm run migrate
+
+      - name: Seed catalog + experiment fixture
+        run: npm run seed -- --experiment
+
+      - name: Integration tests (real PostgreSQL)
+        # Per-suite shard databases are created from this connection; the CI role owns the server.
+        run: npm run test:integration
+        env:
+          TF_TEST_DATABASE_URL: postgresql://ci:ci_only_password@localhost:5432/ci_main
+
+      - name: Invariant views (quiescent)
+        run: npm run invariants -- --quiescent
+
+      - name: Migration rollback smoke (down then up again)
+        run: |
+          npm run migrate:down -- 9
+          npm run migrate
+
+      # Dependency audit remains informational until the advisory baseline is triaged; a hard gate
+      # on an untriaged feed produces red CI with no actionability (documented in the runbook).
+      - name: Dependency audit (report only)
+        continue-on-error: true
+        run: npm audit --audit-level=high

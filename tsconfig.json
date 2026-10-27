@@ -6,5 +6,13 @@
     "declarationMap": false,
     "sourceMap": false
   },
-  "include": ["scripts/**/*.ts", "vitest.config.ts", "vitest.global-setup.ts"]
+  "include": [
+    // The API's ambient augmentations (`req.id`/`req.log`/`req.user`) must be part of this program
+    // too, or tests and scripts typecheck against an un-extended Express.Request.
+    "apps/api/src/types/express.d.ts",
+    "scripts/**/*.ts",
+    "tests/**/*.ts",
+    "vitest.unit.config.ts",
+    "vitest.integration.config.ts"
+  ]
 }

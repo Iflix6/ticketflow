@@ -13,9 +13,19 @@ import { z } from 'zod';
  * - Production refuses values that look like the committed local defaults (see refine below).
  */
 
-const boolFromEnv = z
-  .enum(['true', 'false', '1', '0', 'yes', 'no'])
-  .transform((value) => value === 'true' || value === '1' || value === 'yes');
+const BOOL_TRUE_VALUES = ['true', '1', 'yes'];
+
+/**
+ * Booleans are parsed from explicit strings. `z.coerce.boolean()` would turn `"false"` into `true`
+ * (it uses `Boolean("false")`), which is a classic misconfiguration footgun.
+ * The default is applied to the *string* enum (before the transform), because zod v4 types
+ * `.default()` on a pipe against the output type — and a boolean default would not be re-parsed.
+ */
+const boolFromEnv = (fallback: boolean) =>
+  z
+    .enum(['true', 'false', '1', '0', 'yes', 'no'])
+    .default(fallback ? 'true' : 'false')
+    .transform((value) => BOOL_TRUE_VALUES.includes(value));
 
 const positiveInt = (min: number, max: number) =>
   z.coerce.number().int().min(min).max(max);
@@ -32,7 +42,8 @@ export const envSchema = z
   .object({
     NODE_ENV: z.enum(['local', 'test', 'ci', 'production']).default('local'),
     HOST: z.string().min(1).default('0.0.0.0'),
-    PORT: positiveInt(1, 65535).default(4000),
+    // Port 0 is legal: it asks the OS for a free port, which is exactly what ephemeral test servers use.
+    PORT: positiveInt(0, 65535).default(4000),
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
 
     DATABASE_URL: z.string().refine((v) => /^postgres(ql)?:\/\//.test(v), {
@@ -55,7 +66,7 @@ export const envSchema = z
     AUTH_SECRET: z.string().min(32, 'AUTH_SECRET must be at least 32 characters'),
     SESSION_COOKIE_NAME: z.string().min(1).default('tf_session'),
     SESSION_TTL_HOURS: positiveInt(1, 720).default(12),
-    SECURE_COOKIES: boolFromEnv.default('false'),
+    SECURE_COOKIES: boolFromEnv(false),
 
     RESERVATION_TTL_SECONDS: positiveInt(5, 86_400).default(300),
     MAX_QUANTITY_PER_RESERVATION: positiveInt(1, 100).default(10),
@@ -81,11 +92,11 @@ export const envSchema = z
       ),
     BODY_LIMIT: byteSize.default('100kb'),
 
-    LAB_ENABLED: boolFromEnv.default('false'),
+    LAB_ENABLED: boolFromEnv(false),
     LAB_ADMIN_EMAIL: z.email().default('lab@local.test'),
 
-    METRICS_ENABLED: boolFromEnv.default('true'),
-    OTEL_ENABLED: boolFromEnv.default('false'),
+    METRICS_ENABLED: boolFromEnv(true),
+    OTEL_ENABLED: boolFromEnv(false),
     OTEL_EXPORTER_OTLP_ENDPOINT: z.url().optional(),
 
     GIT_SHA: z.string().optional(),
@@ -145,7 +156,9 @@ export function loadConfig(raw: Record<string, string | undefined> = process.env
     const issues = parsed.error.issues.map(
       (issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`,
     );
-    throw new ConfigError('Invalid environment configuration', issues);
+    // Issues are part of the message itself: a bare "Invalid environment configuration" makes a
+    // crash log useless unless somebody also dumps the `issues` property.
+    throw new ConfigError(`Invalid environment configuration: ${issues.join('; ')}`, issues);
   }
   return Object.freeze({ ...parsed.data });
 }

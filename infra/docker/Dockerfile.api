@@ -1,0 +1,48 @@
+# syntax=docker/dockerfile:1
+
+# Multi-stage, non-root, pinned-major Node LTS image. LOCAL/LAB deployment only — the compose
+# network and defaults are not production guidance (see docs/runbooks).
+
+FROM node:24-alpine AS deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+COPY packages/config/package.json packages/config/package.json
+COPY packages/contracts/package.json packages/contracts/package.json
+COPY apps/api/package.json apps/api/package.json
+COPY apps/worker/package.json apps/worker/package.json
+# Scoped install would need full workspace metadata; `--omit=dev` keeps the runtime image small.
+RUN npm ci --omit=dev --ignore-scripts
+
+FROM node:24-alpine AS build
+WORKDIR /app
+COPY package.json package-lock.json tsconfig.base.json ./
+COPY packages ./packages
+COPY apps/api/package.json apps/api/tsconfig.json apps/api/tsconfig.build.json apps/api/
+COPY apps/api/src apps/api/src
+COPY apps/worker/package.json apps/worker/tsconfig.json apps/worker/tsconfig.build.json apps/worker/
+COPY apps/worker/src apps/worker/src
+COPY --from=deps /app/node_modules ./node_modules
+RUN npm run build --workspace @ticketflow/config \
+ && npm run build --workspace @ticketflow/contracts \
+ && npm run build --workspace @ticketflow/api \
+ && npm run build --workspace @ticketflow/worker
+
+FROM node:24-alpine AS runtime
+WORKDIR /app
+ENV NODE_ENV=local
+# The official image's `node` user (uid 1000) is already non-root; run as it explicitly.
+USER node
+COPY --from=build --chown=node:node /app/node_modules ./node_modules
+# Workspace symlinks inside node_modules resolve against these manifests.
+COPY --from=build --chown=node:node /app/package.json ./package.json
+COPY --from=build --chown=node:node /app/packages/config/package.json ./packages/config/package.json
+COPY --from=build --chown=node:node /app/packages/config/dist ./packages/config/dist
+COPY --from=build --chown=node:node /app/packages/contracts/package.json ./packages/contracts/package.json
+COPY --from=build --chown=node:node /app/packages/contracts/dist ./packages/contracts/dist
+COPY --from=build --chown=node:node /app/apps/api/package.json ./apps/api/package.json
+COPY --from=build --chown=node:node /app/apps/api/dist ./apps/api/dist
+# Migrations ship as .sql assets (the runner reads them from src/db/migrations).
+COPY --from=build --chown=node:node /app/apps/api/src/db/migrations ./apps/api/src/db/migrations
+EXPOSE 4000
+# Exec form: signals reach Node directly (PID 1 shell wrappers swallow SIGTERM).
+CMD ["node", "apps/api/dist/server.js"]

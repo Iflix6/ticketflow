@@ -1,0 +1,80 @@
+{
+  "uid": "ticketflow-core",
+  "title": "TicketFlow — Core Booking Health",
+  "tags": ["ticketflow", "local-lab"],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "refresh": "10s",
+  "time": { "from": "now-30m", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Request rate by route (5m)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "TicketFlow-Prometheus" },
+      "targets": [
+        {
+          "expr": "sum by (route) (rate(ticketflow_http_requests_total[5m]))",
+          "legendFormat": "{{route}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "HTTP latency p50 / p95 / p99",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "TicketFlow-Prometheus" },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum by (le) (rate(ticketflow_http_request_duration_seconds_bucket[5m])))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(ticketflow_http_request_duration_seconds_bucket[5m])))", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, sum by (le) (rate(ticketflow_http_request_duration_seconds_bucket[5m])))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "PG pool connections (total/idle/waiting)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "TicketFlow-Prometheus" },
+      "targets": [
+        { "expr": "ticketflow_pg_pool_connections", "legendFormat": "{{state}}" }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Transaction duration p95 by label",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "TicketFlow-Prometheus" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, label) (rate(ticketflow_transaction_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{label}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Transient retries (40001/40P01) and exhaustions",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "TicketFlow-Prometheus" },
+      "targets": [
+        { "expr": "sum by (code) (rate(ticketflow_tx_retries_total[5m]))", "legendFormat": "retry {{code}}" },
+        { "expr": "sum by (label) (rate(ticketflow_tx_retries_exhausted_total[5m]))", "legendFormat": "exhausted {{label}}" }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Inventory invariant violations (must be 0)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "TicketFlow-Prometheus" },
+      "targets": [
+        { "expr": "sum(ticketflow_inventory_invariant_violations)", "legendFormat": "violations" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+# Local Prometheus scrape config (monitoring profile). Production alerting/scaling is out of scope.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+  external_labels:
+    lab: ticketflow
+    environment: local
+
+scrape_configs:
+  - job_name: ticketflow-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['api:4000']
+        labels:
+          component: api
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
