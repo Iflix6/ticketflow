@@ -65,7 +65,8 @@ export function createAuthRouter(db: Database, config: AppConfig): Router {
       );
 
       req.log.info({ role: user.role }, 'demo token issued');
-      sendJson(res, 200, { token, tokenType: 'Bearer', expiresInSeconds: config.SESSION_TTL_HOURS * 3600 }, req.id);
+      // Same `{ data: ... }` envelope as every other endpoint, so clients parse one shape everywhere.
+      sendJson(res, 200, { data: { token, tokenType: 'Bearer', expiresInSeconds: config.SESSION_TTL_HOURS * 3600 } }, req.id);
     }),
   );
 

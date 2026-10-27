@@ -37,10 +37,8 @@ function main(): void {
 
   server.listen(config.PORT, config.HOST, () => {
     const address = server.address() as AddressInfo;
-    logger.info(
-      { port: address.port, environment: config.NODE_ENV, labEnabled: config.LAB_ENABLED },
-      'api listening',
-    );
+    // `environment` is already a logger base binding; repeating it here produced a duplicate key.
+    logger.info({ port: address.port, labEnabled: config.LAB_ENABLED }, 'api listening');
   });
 
   let shuttingDown = false;

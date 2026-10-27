@@ -63,6 +63,13 @@ describe('toErrorBody', () => {
     expect(body.details?.['sqlstate']).toBe('23505');
   });
 
+  it('never mistakes an application ErrorCode for a SQLSTATE', () => {
+    // Regression guard: `AppError` also has a string `code`, so reading the wrong object would
+    // publish e.g. `sqlstate: "forbidden"` — misleading in logs, dashboards and client payloads.
+    const { body } = toErrorBody(new AppError('forbidden', 'no role'), REQUEST_ID);
+    expect(body.details?.['sqlstate']).toBeUndefined();
+  });
+
   it('attaches field-level details from a ZodError via AppError construction', () => {
     const schema = z.object({ quantity: z.number().int().min(1) });
     const parsed = schema.safeParse({ quantity: 0 });

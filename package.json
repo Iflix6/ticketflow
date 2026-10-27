@@ -25,6 +25,7 @@
     "dev:api": "tsx watch apps/api/src/server.ts",
     "dev:worker": "tsx watch apps/worker/src/main.ts",
     "start:api": "node apps/api/dist/server.js",
+    "boot:smoke": "tsx scripts/boot-smoke.ts",
     "test": "npm run test:unit && npm run test:integration",
     "test:unit": "vitest run --config vitest.unit.config.ts",
     "test:integration": "vitest run --config vitest.integration.config.ts",

@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
+import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 /**
@@ -9,32 +11,41 @@ import { fileURLToPath } from 'node:url';
  * "never report success you did not measure" rule made a shell one-liner insufficient, because a
  * one-liner cannot tell you *which* guarantee failed.
  *
- * Steps 1–5 are hermetic. Steps 6–9 need PostgreSQL (and step 6 `docker compose up -d postgres`
- * or CI service containers); they are skipped with an explicit SKIP line when the database is
- * unreachable, and that skip is reflected in the exit code unless `--allow-skip` is passed.
+ * Steps 1–4 are hermetic. Steps 5–6 need PostgreSQL; they are skipped with an explicit SKIP line
+ * when the database is unreachable, and that skip fails the run unless `--allow-skip` is passed.
+ * The final step boots the *compiled* artifact over real HTTP, so a stale `dist/` cannot let the
+ * gate pass on source-only green (a stale build once masked two fixed defects).
  */
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+
+// Node 24 refuses to spawn `.cmd` shims without a shell (EINVAL), so npm is invoked through its own
+// CLI JavaScript entrypoint — the same code `npm.cmd` wraps, portable across platforms. We resolve
+// the conventional location first and fall back to the primary candidate so the value is a plain
+// `string` (indexing the array would yield `string | undefined` under noUncheckedIndexedAccess).
+const npmCliDir = path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+const npmCliFallback = path.join(path.dirname(process.execPath), 'npm-cli.js');
+const npmCli = existsSync(npmCliDir) ? npmCliDir : npmCliFallback;
 
 interface Step {
   name: string;
-  command: string;
-  args: string[];
+  script: string;
   needsDatabase?: boolean;
   timeoutMs?: number;
 }
 
 const STEPS: Step[] = [
-  { name: 'typecheck (strict)', command: npm, args: ['run', 'typecheck'] },
-  { name: 'lint', command: npm, args: ['run', 'lint'] },
-  { name: 'unit tests', command: npm, args: ['run', 'test:unit'] },
-  { name: 'integration tests (real PostgreSQL)', command: npm, args: ['run', 'test:integration'], needsDatabase: true, timeoutMs: 300_000 },
+  { name: 'build (workspaces)', script: 'build' },
+  { name: 'typecheck (strict)', script: 'typecheck' },
+  { name: 'lint', script: 'lint' },
+  { name: 'unit tests', script: 'test:unit' },
+  { name: 'integration tests (real PostgreSQL)', script: 'test:integration', needsDatabase: true, timeoutMs: 300_000 },
+  { name: 'boot smoke (built artifact over HTTP)', script: 'boot:smoke', needsDatabase: true, timeoutMs: 60_000 },
 ];
 
 function runStep(step: Step, env: NodeJS.ProcessEnv): Promise<'pass' | 'fail' | 'skip'> {
   return new Promise((resolve) => {
-    const child = spawn(step.command, step.args, { cwd: root, env, stdio: 'inherit' });
+    const child = spawn(process.execPath, [npmCli, 'run', step.script], { cwd: root, env, stdio: 'inherit' });
     const timer =
       step.timeoutMs === undefined
         ? undefined

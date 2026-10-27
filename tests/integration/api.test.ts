@@ -4,7 +4,7 @@ import type { Express } from 'express';
 import type { Database } from '../../apps/api/src/db/pool.js';
 import { createApp } from '../../apps/api/src/app.js';
 import { createLogger } from '../../apps/api/src/observability/logger.js';
-import { issueToken } from '../../apps/api/src/modules/auth/credentials.js';
+import { issueToken, hashPassword } from '../../apps/api/src/modules/auth/credentials.js';
 import { testConfig } from '../helpers/config.js';
 import { databaseAvailable, seedCatalog, startTestDatabase, type TestDatabaseHandle } from '../helpers/integration-db.js';
 
@@ -131,6 +131,12 @@ suite('api boot & middleware pipeline', () => {
       const anonymous = await request(labApp).get('/api/v1/lab/strategies');
       expect(anonymous.status).toBe(401);
 
+      // Scheme-less bearer material is not an authentication attempt it can honor: 401, not 403.
+      const noScheme = await request(labApp)
+        .get('/api/v1/lab/strategies')
+        .set('Authorization', demoToken('LAB_ADMIN').replace('Bearer ', ''));
+      expect(noScheme.status).toBe(401);
+
       const asCustomer = await request(labApp)
         .get('/api/v1/lab/strategies')
         .set('Authorization', demoToken('CUSTOMER'));
@@ -174,14 +180,74 @@ suite('api boot & middleware pipeline', () => {
       expect(metrics.status).toBe(200);
     });
   });
+
+  describe('demo auth token exchange', () => {
+    const password = 'local-demo-password-2026';
+
+    it('exchanges real local credentials for a usable token without enabling enumeration', async () => {
+      const stored = await hashPassword(password);
+      await db.query(
+        'INSERT INTO app_users (email, role, password_hash) VALUES ($1, $2, $3)',
+        ['auth-demo@local.test', 'CUSTOMER', stored],
+      );
+
+      const ok = await request(labApp)
+        .post('/api/v1/auth/token')
+        .send({ email: 'auth-demo@local.test', password });
+      expect(ok.status).toBe(200);
+      expect(ok.body.data.token).toMatch(/^tf1\./);
+      expect(ok.body.data.tokenType).toBe('Bearer');
+
+      // The issued token is accepted by a real guarded route (CUSTOMER, so 403 — not 401).
+      const guarded = await request(labApp)
+        .get('/api/v1/lab/strategies')
+        .set('Authorization', `Bearer ${String(ok.body.data.token)}`);
+      expect(guarded.status).toBe(403);
+
+      const wrongPassword = await request(labApp)
+        .post('/api/v1/auth/token')
+        .send({ email: 'auth-demo@local.test', password: 'wrong-but-long-enough' });
+      const unknownUser = await request(labApp)
+        .post('/api/v1/auth/token')
+        .send({ email: 'ghost@local.test', password });
+
+      expect(wrongPassword.status).toBe(401);
+      expect(unknownUser.status).toBe(401);
+      // Identical payloads: an attacker cannot tell "no such account" from "bad password".
+      expect(unknownUser.body.error.message).toBe(wrongPassword.body.error.message);
+
+      // Case-insensitive lookup matches the unique index in migration 0003.
+      const mixedCase = await request(labApp)
+        .post('/api/v1/auth/token')
+        .send({ email: 'Auth-Demo@LOCAL.test', password });
+      expect(mixedCase.status).toBe(200);
+
+      // A password below the schema floor is a 400, not a silent hash mismatch.
+      const tooShort = await request(labApp)
+        .post('/api/v1/auth/token')
+        .send({ email: 'auth-demo@local.test', password: 'short' });
+      expect(tooShort.status).toBe(400);
+      expect(tooShort.body.error.code).toBe('validation_failed');
+    });
+
+    it('token routes do not exist when the lab is disabled', async () => {
+      const res = await request(app).post('/api/v1/auth/token').send({ email: 'a@local.test', password });
+      expect(res.status).toBe(404);
+    });
+  });
 });
 
-/** Local demo token for tests only; mirrors what `POST /api/v1/auth/token` would return. */
+/**
+ * Ready-to-use `Authorization` header value for tests; the token itself is what
+ * `POST /api/v1/auth/token` would return, and clients must send it with the `Bearer` scheme
+ * (see `middleware/authenticate.ts#extractToken`), so the scheme is part of this helper's contract.
+ */
 function demoToken(role: 'CUSTOMER' | 'LAB_ADMIN'): string {
   // Same secret the tested app validates against (testConfig's base value).
-  return issueToken(
+  const token = issueToken(
     { id: '00000000-0000-4000-8000-000000000001', email: `${role.toLowerCase()}@local.test`, role },
     testConfig().AUTH_SECRET,
     600,
   );
+  return `Bearer ${token}`;
 }

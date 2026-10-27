@@ -14,11 +14,8 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 
 // Node 24 refuses to spawn `.cmd` shims without a shell (EINVAL), so npm is invoked through its
 // own CLI JavaScript entrypoint — the same code `npm.cmd` wraps, portable across platforms.
-const npmCliCandidates = [
-  path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js'),
-  path.join(path.dirname(process.execPath), 'npm-cli.js'),
-];
-const npmCli = npmCliCandidates.find((candidate) => existsSync(candidate)) ?? npmCliCandidates[0];
+const npmCliDir = path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+const npmCli = existsSync(npmCliDir) ? npmCliDir : path.join(path.dirname(process.execPath), 'npm-cli.js');
 
 /**
  * Proves the *actual operational commands* work end-to-end — not a reimplementation of them:
@@ -101,7 +98,8 @@ suite('operational scripts run for real', () => {
 
     // Full rollback: every migration down in reverse order, ending with no ledger rows.
     const down = await npmRun('migrate:down', ['9']);
-    expect(down).toMatch(/rolling back 0009/);
+    expect(down).toMatch(/rolling back 9_invariant_views \.\.\. ok/);
+    expect(down).toMatch(/rolling back 1_extensions_and_id_generator \.\.\. ok/);
 
     const client = new pg.Client({ connectionString: env['DATABASE_URL'] });
     await client.connect();
