@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+
+# Local environment and secrets (never commit real credentials)
+.env
+.env.local
+.env.*.local
+
+# Experiment artifacts that are large or machine specific
+load-tests/results/*.json
+load-tests/results/*.csv
+install.log
+*.log
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json

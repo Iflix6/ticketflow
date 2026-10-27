@@ -1,0 +1,14 @@
+# Normalize line endings so SQL migrations and shell-free Node scripts behave identically
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff2 binary
+*.csv text eol=lf
+*.json text eol=lf
+*.sql text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf

@@ -1,0 +1,48 @@
+{
+  "name": "ticketflow",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TicketFlow Reliability Lab — event-ticket booking correctness laboratory (1,000 buyers vs 100 tickets)",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json && npm run typecheck --workspaces --if-present",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "build": "npm run build --workspaces --if-present",
+    "db:up": "docker compose up -d postgres redis",
+    "db:down": "docker compose down",
+    "compose:up": "docker compose up -d --build",
+    "migrate": "tsx scripts/migrate.ts",
+    "migrate:down": "tsx scripts/migrate.ts --down",
+    "seed": "tsx scripts/seed.ts",
+    "dev:api": "tsx watch apps/api/src/server.ts",
+    "dev:worker": "tsx watch apps/worker/src/main.ts",
+    "start:api": "node apps/api/dist/server.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "invariants": "tsx scripts/check-invariants.ts",
+    "verify": "tsx scripts/verify.ts",
+    "clean": "tsx scripts/clean.ts"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.19.2",
+    "@types/pg": "^8.23.1",
+    "@types/supertest": "^6.0.2",
+    "eslint": "^9.39.5",
+    "globals": "^15.15.0",
+    "supertest": "^7.3.1",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.72.1",
+    "vitest": "^3.2.7"
+  }
+}

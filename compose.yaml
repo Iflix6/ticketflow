@@ -1,0 +1,178 @@
+# TicketFlow Reliability Lab — local development and CI services.
+#
+# LOCAL/DEVELOPMENT ONLY. These credentials, ports and settings are deliberately simple and
+# published on 127.0.0.1; they are not production deployment guidance (see docs/runbooks).
+#
+# Usage:
+#   npm run db:up        # postgres + redis only (what tests and dev servers expect)
+#   docker compose up    # + api + worker
+#   docker compose --profile monitoring up   # + prometheus + grafana (+ otel collector)
+
+name: ticketflow-lab
+
+x-postgres-env: &postgres-env
+  POSTGRES_USER: ${POSTGRES_USER:-ticketflow}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ticketflow_local_only}
+  POSTGRES_DB: ${POSTGRES_DB:-ticketflow}
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: ticketflow-postgres
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=''
+      - -c
+      - max_connections=200
+      - -c
+      - log_min_duration_statement=100ms
+    environment:
+      <<: *postgres-env
+    ports:
+      - '127.0.0.1:5432:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/postgres/init-test-database.sql:/docker-entrypoint-initdb.d/10-init-test-database.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-ticketflow} -d ${POSTGRES_DB:-ticketflow}']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    networks: [ticketflow]
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: ticketflow-redis
+    # appendonly keeps queue/outbox job state across restarts; maxmemory prevents unbounded growth.
+    command: ['redis-server', '--appendonly', 'yes', '--maxmemory', '256mb', '--maxmemory-policy', 'volatile-lru']
+    ports:
+      - '127.0.0.1:6379:6379'
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [ticketflow]
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.api
+    container_name: ticketflow-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: local
+      HOST: 0.0.0.0
+      PORT: '4000'
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ticketflow}:${POSTGRES_PASSWORD:-ticketflow_local_only}@postgres:5432/${POSTGRES_DB:-ticketflow}
+      REDIS_URL: redis://redis:6379
+      AUTH_SECRET: ${AUTH_SECRET:-local_only_secret_replace_me_please_32chars}
+      LAB_ENABLED: ${LAB_ENABLED:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - '127.0.0.1:4000:4000'
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:4000/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks: [ticketflow]
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt:
+      - no-new-privileges:true
+
+  worker:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.worker
+    container_name: ticketflow-worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: local
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ticketflow}:${POSTGRES_PASSWORD:-ticketflow_local_only}@postgres:5432/${POSTGRES_DB:-ticketflow}
+      REDIS_URL: redis://redis:6379
+      AUTH_SECRET: ${AUTH_SECRET:-local_only_secret_replace_me_please_32chars}
+      LAB_ENABLED: ${LAB_ENABLED:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    networks: [ticketflow]
+    healthcheck:
+      # The worker writes a heartbeat file; the check fails when it stops progressing.
+      test: ['CMD-SHELL', 'test $(( $(date +%s) - $(stat -c %Y /tmp/worker-heartbeat 2>/dev/null || echo 0) )) -lt 60']
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 30s
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt:
+      - no-new-privileges:true
+
+  prometheus:
+    profiles: [monitoring]
+    image: prom/prometheus:v3.1.0
+    container_name: ticketflow-prometheus
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    ports:
+      - '127.0.0.1:9090:9090'
+    networks: [ticketflow]
+    depends_on: [api]
+
+  grafana:
+    profiles: [monitoring]
+    image: grafana/grafana-oss:11.5.1
+    container_name: ticketflow-grafana
+    environment:
+      # Local-only admin bootstrap. Change or disable before exposing anywhere.
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin_local_only}
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - '127.0.0.1:3001:3000'
+    networks: [ticketflow]
+    depends_on: [prometheus]
+
+  otel-collector:
+    profiles: [monitoring, tracing]
+    image: otel/opentelemetry-collector-contrib:0.115.0
+    container_name: ticketflow-otel
+    volumes:
+      - ./infra/otel/collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - '127.0.0.1:4318:4318'
+    networks: [ticketflow]
+
+volumes:
+  postgres-data:
+  redis-data:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  ticketflow:
+    driver: bridge

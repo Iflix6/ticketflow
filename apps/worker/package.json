@@ -1,0 +1,20 @@
+{
+  "name": "@ticketflow/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
+    "dev": "tsx watch src/main.ts"
+  },
+  "dependencies": {
+    "@ticketflow/config": "^0.1.0",
+    "@ticketflow/contracts": "^0.1.0",
+    "bullmq": "^6.5.0",
+    "ioredis": "^5.11.1",
+    "pg": "^8.23.1",
+    "pino": "^9.14.0"
+  }
+}
