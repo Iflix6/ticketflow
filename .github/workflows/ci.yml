@@ -80,6 +80,14 @@ jobs:
       - name: Invariant views (quiescent)
         run: npm run invariants -- --quiescent
 
+      # Boots the *compiled* artifact (`dist/server.js`) over real HTTP against the seeded service
+      # database, then verifies graceful shutdown. This is the step that a stale build once masked,
+      # so it must run after Build (artifact present) and after Seed (login fixtures exist).
+      - name: Boot smoke (built artifact over HTTP)
+        run: npm run boot:smoke
+        env:
+          LAB_ENABLED: 'true'
+
       - name: Migration rollback smoke (down then up again)
         run: |
           npm run migrate:down -- 9

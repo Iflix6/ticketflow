@@ -16,6 +16,10 @@ import { EventsRepository } from './modules/events/repository.js';
 import { EventsService } from './modules/events/service.js';
 import { createAuthRouter } from './modules/auth/routes.js';
 import { createLabRouter } from './modules/experiments/routes.js';
+import { createReservationsRouter } from './modules/reservations/routes.js';
+import { ReservationsService } from './modules/reservations/service.js';
+import { createBookingsRouter, createMeBookingsRouter } from './modules/bookings/routes.js';
+import { BookingsService } from './modules/bookings/service.js';
 
 /**
  * The Express app, assembled by factory — no module-level singletons — so integration tests can
@@ -70,6 +74,17 @@ export function createApp(deps: AppDependencies): Express {
   const api = express.Router();
   api.use(createRateLimiter(config, counterStore));
   api.use(`/${API_VERSION}/events`, createEventsRouter(new EventsService(new EventsRepository(db))));
+
+  // Reservation + booking endpoints are core customer functionality (always mounted, unlike the lab
+  // routers), but every one is behind `authenticate` — an unauthenticated caller never reaches the
+  // allocation logic. These use concrete sub-prefixes so the `api`-level 404 still answers `/api/v1/*`
+  // paths that match nothing here.
+  const requireAuth = authenticate(config, true);
+  const reservationsService = new ReservationsService(db, config, logger);
+  const bookingsService = new BookingsService(db);
+  api.use(`/${API_VERSION}/reservations`, requireAuth, createReservationsRouter(reservationsService));
+  api.use(`/${API_VERSION}/bookings`, requireAuth, createBookingsRouter(bookingsService));
+  api.use(`/${API_VERSION}/me`, requireAuth, createMeBookingsRouter(bookingsService));
 
   if (isLabEnabled(config)) {
     // Local demo token exchange (spec-sanctioned test tokens); the browser session mechanism

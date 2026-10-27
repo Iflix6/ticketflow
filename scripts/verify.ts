@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { loadDotEnv } from '@ticketflow/config';
 
 /**
  * Single-command acceptance suite (`npm run verify`).
@@ -80,6 +81,9 @@ async function databaseReachable(env: NodeJS.ProcessEnv): Promise<boolean> {
 
 async function main(): Promise<void> {
   const allowSkip = process.argv.includes('--allow-skip');
+  // Load `.env` first: DATABASE_URL and friends live there, and without them this runner would
+  // wrongly conclude the database is unreachable and SKIP the integration and boot-smoke gates.
+  loadDotEnv(root);
   const env = { ...process.env };
   const hasDatabase = await databaseReachable(env);
   if (!hasDatabase) {

@@ -61,16 +61,23 @@ function startServer(): {
   const child = spawn(process.execPath, [serverEntry], {
     cwd: root,
     env,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    // An IPC channel (4th slot) lets us trigger the server's graceful drain deterministically on
+    // every platform, instead of relying on Windows signal semantics that skip process handlers.
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
 
   child.stdout?.setEncoding('utf8');
   child.stderr?.setEncoding('utf8');
 
+  // Keep EVERY line for the whole run: the shutdown check greps the accumulated log for
+  // 'shutdown complete'. This collector stays attached even after port discovery resolves below.
+  child.stdout?.on('data', (chunk: string) => lines.push(chunk));
+  child.stderr?.on('data', (chunk: string) => lines.push(chunk));
+
   const listening = new Promise<number>((resolve, reject) => {
     let buffer = '';
+    let settled = false;
     const onData = (chunk: string): void => {
-      lines.push(chunk);
       buffer += chunk;
       let newline: number;
       while ((newline = buffer.indexOf('\n')) >= 0) {
@@ -79,7 +86,8 @@ function startServer(): {
         if (raw.length === 0) continue;
         try {
           const parsed = JSON.parse(raw) as { msg?: string; port?: number };
-          if (parsed.msg === 'api listening' && typeof parsed.port === 'number') {
+          if (!settled && parsed.msg === 'api listening' && typeof parsed.port === 'number') {
+            settled = true;
             child.stdout?.off('data', onData);
             resolve(parsed.port);
           }
@@ -89,7 +97,6 @@ function startServer(): {
       }
     };
     child.stdout?.on('data', onData);
-    child.stderr?.on('data', (chunk: string) => lines.push(chunk));
     child.once('exit', (code) => reject(new Error(`server exited before listening (code ${String(code)})`)));
     const timer = setTimeout(() => reject(new Error('server did not start listening within 15s')), 15_000);
     timer.unref();
@@ -220,9 +227,9 @@ async function main(): Promise<void> {
     },
   });
 
-  // Graceful shutdown: ask the process to drain and confirm it exits cleanly on its own handler.
+  // Graceful shutdown: ask the process to drain over IPC and confirm it exits cleanly on its handler.
+  const signalName = 'ipc:graceful-shutdown';
   const shutdown = await new Promise<{ ok: boolean; detail: string }>((resolve) => {
-    const signal = process.platform === 'win32' ? 'SIGBREAK' : 'SIGTERM';
     let settled = false;
     const finish = (ok: boolean, detail: string): void => {
       if (settled) return;
@@ -238,12 +245,13 @@ async function main(): Promise<void> {
     });
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
-      finish(false, `no graceful exit within 8s of ${signal}`);
+      finish(false, `no graceful exit within 8s of ${signalName}`);
     }, 8_000);
     timer.unref();
-    child.kill(signal);
+    child.once('error', (error) => finish(false, `ipc send failed: ${error.message}`));
+    child.send('graceful-shutdown');
   });
-  results.push({ name: `graceful shutdown (${process.platform === 'win32' ? 'SIGBREAK' : 'SIGTERM'})`, ...shutdown });
+  results.push({ name: `graceful shutdown (${signalName})`, ...shutdown });
   console.log(`  ${shutdown.ok ? 'PASS' : 'FAIL'}  graceful shutdown — ${shutdown.detail}`);
 
   // Ensure the child is gone even if the graceful path below failed to report.

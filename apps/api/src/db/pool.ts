@@ -58,16 +58,19 @@ export class PostgresTimeouts {
 }
 
 /**
- * Timeouts are applied per transaction with `SET LOCAL` so a misbehaving session cannot hold locks
- * indefinitely. They are sent as three statements on purpose: PostgreSQL's extended protocol (used by
- * `query(text, params)`) rejects multiple statements in one command, so a single
- * `SET LOCAL a; SET LOCAL b;` string would fail at runtime.
+ * Timeouts are applied per transaction so a misbehaving session cannot hold locks indefinitely. They
+ * go through `set_config(..., true)` (the `true` marks them transaction-local, exactly like
+ * `SET LOCAL`) rather than `SET LOCAL x = $1`: PostgreSQL does NOT allow a bind parameter in a `SET`
+ * statement (`SQLSTATE 42601`), so the parameterized `SET LOCAL` form parses in a fake client but
+ * fails against a real server. `set_config` is an ordinary function call and binds cleanly. Values are
+ * sent as strings because that is the signature `set_config` accepts; the unit of these GUCs is ms.
  */
 export async function applySessionTimeouts(client: SqlClient, timeouts: PostgresTimeouts): Promise<void> {
-  await client.query('SET LOCAL statement_timeout = $1', [timeouts.statementTimeoutMs]);
-  await client.query('SET LOCAL lock_timeout = $1', [timeouts.lockTimeoutMs]);
-  await client.query('SET LOCAL idle_in_transaction_session_timeout = $1', [
-    timeouts.idleInTransactionTimeoutMs,
+  await client.query('SELECT set_config($1, $2, true)', ['statement_timeout', String(timeouts.statementTimeoutMs)]);
+  await client.query('SELECT set_config($1, $2, true)', ['lock_timeout', String(timeouts.lockTimeoutMs)]);
+  await client.query('SELECT set_config($1, $2, true)', [
+    'idle_in_transaction_session_timeout',
+    String(timeouts.idleInTransactionTimeoutMs),
   ]);
 }
 

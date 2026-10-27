@@ -75,9 +75,13 @@ describe('withTransaction', () => {
 
     const statements = client.calls.map((c) => c.text);
     expect(statements[0]).toBe('BEGIN ISOLATION LEVEL READ COMMITTED');
-    expect(statements).toContain('SET LOCAL statement_timeout = $1');
-    expect(statements).toContain('SET LOCAL lock_timeout = $1');
-    expect(statements).toContain('SET LOCAL idle_in_transaction_session_timeout = $1');
+    // Timeouts go through set_config (transaction-local), never a parameterized `SET` (42601).
+    const setConfig = client.calls.filter((c) => c.text === 'SELECT set_config($1, $2, true)');
+    expect(setConfig.map((c) => c.params?.[0])).toEqual([
+      'statement_timeout',
+      'lock_timeout',
+      'idle_in_transaction_session_timeout',
+    ]);
     expect(statements).toContain('SELECT 1');
     expect(statements).toContain('COMMIT');
     expect(client.released).toBe(true);
@@ -120,8 +124,8 @@ describe('withTransaction', () => {
     const client = new FakeClient();
     const { db } = fakeDatabase(client);
     await withTransaction(db, { label: 'test.defaults' }, async () => undefined);
-    const statementTimeout = client.calls.find((c) => c.text === 'SET LOCAL statement_timeout = $1');
-    expect(statementTimeout?.params).toEqual([DEFAULT_TIMEOUTS.statementTimeoutMs]);
+    const statementTimeout = client.calls.find((c) => c.params?.[0] === 'statement_timeout');
+    expect(statementTimeout?.params).toEqual(['statement_timeout', String(DEFAULT_TIMEOUTS.statementTimeoutMs)]);
   });
 });
 

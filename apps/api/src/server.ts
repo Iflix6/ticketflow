@@ -62,6 +62,12 @@ function main(): void {
         .catch((closeError: unknown) => {
           logger.error({ err: closeError }, 'error closing pool');
           process.exitCode = 1;
+        })
+        .finally(() => {
+          // Exit explicitly once drained: a lingering handle (a supervisor's IPC channel, a
+          // keep-alive socket, a non-unref'd timer) must not keep an already-drained process alive.
+          // The forced-exit timer above remains the safety net if close() itself wedges.
+          process.exit(process.exitCode ?? 0);
         });
     });
     server.closeIdleConnections();
@@ -71,6 +77,15 @@ function main(): void {
   process.on('SIGINT', () => shutdown('SIGINT'));
   // An escalated second signal skips the drain: operators need an out when a request is wedged.
   process.on('SIGBREAK', () => shutdown('SIGBREAK'));
+
+  // IPC shutdown for supervisors and the boot-smoke gate. Windows cannot deliver a graceful signal
+  // to a spawned child reliably (SIGTERM maps to TerminateProcess, which skips handlers), so an IPC
+  // message is the portable, deterministic way to exercise the drain path. It is inert in production:
+  // the handler only fires if a parent opened an IPC channel, which `node server.js` under Docker/CI
+  // never does on its own.
+  process.on('message', (message: unknown) => {
+    if (message === 'graceful-shutdown') shutdown('ipc:graceful-shutdown');
+  });
 
   process.on('unhandledRejection', (reason) => {
     logger.error({ err: reason }, 'unhandled rejection');

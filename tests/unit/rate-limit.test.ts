@@ -42,10 +42,11 @@ describe('InMemoryCounterStore', () => {
     expect((await store.increment('k', 60_000)).count).toBe(2);
     expect((await store.increment('other', 60_000)).count).toBe(1); // keys are independent
     // A window is only "reset" once the clock actually passes its expiry: `Date.now()` has 1 ms
-    // granularity, so sub-millisecond assertions would race the scheduler rather than the store.
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect((await store.increment('short', 1)).count).toBe(1); // fresh window for a 1 ms key
-    expect((await store.increment('short', 1)).count).toBe(1); // elapsed between calls → new window again
+    // granularity, so back-to-back microtask calls can land in the same millisecond. We wait
+    // measurably longer than the window instead of racing the scheduler.
+    expect((await store.increment('short', 5)).count).toBe(1); // fresh window for a 5 ms key
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    expect((await store.increment('short', 5)).count).toBe(1); // window elapsed -> new window again
     expect((await store.increment('k', 60_000)).count).toBe(3); // long window survived the wait
     store.close();
   });
