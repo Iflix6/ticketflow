@@ -140,9 +140,13 @@ describe('docs/api/openapi.yaml matches the implemented routes', () => {
     expect(findings).toEqual([]);
   });
 
-  it('keeps the lab and auth routers unmounted when LAB_ENABLED is false', () => {
+  it('keeps the lab and demo-token routers unmounted when LAB_ENABLED is false', () => {
     // The spec documents them, and they must be genuinely absent in a public deployment (ADR-0009) —
     // otherwise "restricted dashboard" is a UI convention rather than a server guarantee.
+    // `layer.route.path` is MOUNT-RELATIVE (`/token`, not `/auth/token`), so the old filter on
+    // `/^\\/(auth|lab)/` matched nothing and the assertion passed vacuously for every prior phase.
+    // These are the real relative paths, and the Phase-5 session routes are asserted PRESENT: they
+    // are the UI's auth path and stay mounted even with the lab off.
     const publicApp = createApp({
       config: testConfig({ LAB_ENABLED: 'false' }),
       db,
@@ -152,7 +156,8 @@ describe('docs/api/openapi.yaml matches the implemented routes', () => {
     const publicPaths = registeredRoutes(publicApp as unknown as { router: { stack: unknown[] } }).map(
       (route) => route.path,
     );
-    expect(publicPaths.filter((p) => p.startsWith('/lab') || p.startsWith('/auth'))).toEqual([]);
+    expect(publicPaths.filter((p) => ['/token', '/strategies', '/runs', '/runs/:id', '/runs/:id/results', '/fixtures/reset'].includes(p))).toEqual([]);
+    expect(publicPaths).toEqual(expect.arrayContaining(['/session', '/session/rotate', '/session/logout']));
     expect(publicPaths).toEqual(expect.arrayContaining(['/', '/:id', '/:id/cancel', '/:id/checkout']));
   });
 

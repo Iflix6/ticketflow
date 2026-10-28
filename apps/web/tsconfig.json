@@ -1,0 +1,28 @@
+{
+  // Next.js App Router TypeScript config. It does NOT extend tsconfig.base.json on purpose: the base
+  // pins `module: NodeNext` (every relative import carries `.js`), while Next compiles with bundler
+  // resolution. The strictness flags that catch real bugs are restated here so the UI is typechecked
+  // to the same standard as the API. (`next build` may add its own keys; that is expected, not drift.)
+  "compilerOptions": {
+    "target": "ES2024",
+    "lib": ["dom", "dom.iterable", "ES2024"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "jsx": "preserve",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitOverride": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "incremental": true,
+    "plugins": [{ "name": "next" }],
+    "paths": { "@/*": ["./*"] }
+  },
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+  "exclude": ["node_modules", ".next"]
+}

@@ -38,6 +38,7 @@ tags:
 
 security:
   - bearerAuth: []
+  - cookieAuth: []
 
 paths:
   /health/live:
@@ -218,6 +219,138 @@ paths:
                       expiresInSeconds: { type: integer }
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/auth/session:
+    post:
+      operationId: startSession
+      tags: [auth]
+      summary: Browser login — starts a DB-backed HttpOnly cookie session
+      description: |
+        Phase-5 browser auth path (always mounted, unlike the demo token exchange). On success the
+        response sets `tf_session`: HttpOnly, SameSite=Lax, Path=/, Max-Age = SESSION_TTL_HOURS, and
+        Secure only when NODE_ENV=production. The server stores only the SHA-256 hash of the token
+        (migration 0003), so a database leak yields no usable sessions. Expiry is absolute and
+        compared against the database clock — no silent sliding.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 12, maxLength: 200 }
+      responses:
+        '200':
+          description: Session started; `Set-Cookie: tf_session=…` accompanies the body.
+          headers:
+            Set-Cookie:
+              description: '`tf_session` — HttpOnly, SameSite=Lax, Path=/, Max-Age=ttl.'
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [user, expiresAt]
+                    properties:
+                      user: { $ref: '#/components/schemas/SessionUser' }
+                      expiresAt: { type: string, format: date-time }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+    get:
+      operationId: readSession
+      tags: [auth]
+      summary: Who am I — resolves cookie first, bearer token second
+      responses:
+        '200':
+          description: The authenticated identity.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [user]
+                    properties:
+                      user: { $ref: '#/components/schemas/SessionUser' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/auth/session/rotate:
+    post:
+      operationId: rotateSession
+      tags: [auth]
+      summary: Replace the session token atomically (explicit rotation)
+      description: |
+        Rotation is deliberately EXPLICIT, not per-request: a browser fires parallel requests, and
+        rotating on every one would 401 requests already in flight with the old cookie. The swap is
+        a single UPDATE keyed by the OLD token hash, so two concurrent rotations cannot both succeed
+        — the loser gets 401 and must re-authenticate. Also extends `expires_at` from the database
+        clock (the only way a session outlives its initial TTL, and always by a full fresh window).
+      responses:
+        '200':
+          description: Rotated; the response sets the new `tf_session` cookie.
+          headers:
+            Set-Cookie:
+              description: New `tf_session` value replacing the presented one.
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [rotated, expiresAt]
+                    properties:
+                      rotated: { type: boolean, const: true }
+                      expiresAt: { type: string, format: date-time }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/auth/session/logout:
+    post:
+      operationId: logoutSession
+      tags: [auth]
+      summary: Revoke the presented session and clear the cookie (idempotent)
+      description: |
+        Always 200: the client's goal ("I am not signed in") is satisfied whether the session was
+        live, already revoked, or never existed. `data.revoked` reports honestly whether a LIVE
+        session was actually revoked by this call. Revocation sets `revoked_at` — the row survives
+        for audit; only the next login's per-user cleanup prunes dead rows.
+      security: []
+      responses:
+        '200':
+          description: Signed-out state guaranteed; `revoked` says whether a live session died here.
+          headers:
+            Set-Cookie:
+              description: '`tf_session=` with Max-Age=0 — cookie deletion incantation.'
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [revoked]
+                    properties:
+                      revoked: { type: boolean }
+        '400': { $ref: '#/components/responses/ValidationError' }
         '429': { $ref: '#/components/responses/RateLimited' }
 
   /api/v1/reservations:
@@ -596,6 +729,14 @@ components:
       scheme: bearer
       bearerFormat: HMAC-signed local demo token
       description: '`Authorization: Bearer <token>` — see `/api/v1/auth/token`.'
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: tf_session
+      description: |
+        Phase-5 browser session (HttpOnly, SameSite=Lax, SHA-256-hashed at rest). An explicit
+        `Authorization` header WINS over an ambient cookie, so scripts are never downgraded by a
+        stray browser session. Same `req.user` contract either way.
 
   parameters:
     Page:
@@ -703,6 +844,15 @@ components:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
 
   schemas:
+    SessionUser:
+      type: object
+      description: Identity as resolved from a live session or bearer token — identical shape either way.
+      required: [id, email, role]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        role: { type: string, enum: [CUSTOMER, LAB_ADMIN] }
+
     EventStatus:
       type: string
       enum: [DRAFT, ON_SALE, SOLD_OUT, CANCELED, FINISHED]

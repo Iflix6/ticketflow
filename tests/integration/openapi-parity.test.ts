@@ -245,6 +245,14 @@ function recipesFor(secrets: {
     'GET /api/v1/events/{id}': {},
     'GET /api/v1/events/{id}/tiers': {},
     'POST /api/v1/auth/token': { body: { email: 'parity-customer@local.test', password: DEMO_PASSWORD } },
+    // Phase-5 sessions. The 2xx chain (cookie really works end to end) is `sessions.test.ts`; here the
+    // recipes prove the documented routes resolve and the observed statuses are declared. GET reads the
+    // Bearer path (cookie-first resolution is covered there); rotate without a cookie is the documented
+    // 401; logout is 200 even with nothing to revoke — that idempotence IS the documented contract.
+    'POST /api/v1/auth/session': { body: { email: 'parity-customer@local.test', password: DEMO_PASSWORD } },
+    'GET /api/v1/auth/session': { auth: customerAuth },
+    'POST /api/v1/auth/session/rotate': {},
+    'POST /api/v1/auth/session/logout': {},
     'POST /api/v1/reservations': {
       auth: customerAuth,
       idempotency: 'create',

@@ -14,7 +14,8 @@ import { createHealthRouter } from './modules/health/routes.js';
 import { createEventsRouter } from './modules/events/routes.js';
 import { EventsRepository } from './modules/events/repository.js';
 import { EventsService } from './modules/events/service.js';
-import { createAuthRouter } from './modules/auth/routes.js';
+import { createAuthRouter, createSessionRouter } from './modules/auth/routes.js';
+import { SessionService } from './modules/auth/sessions.js';
 import { createLabRouter } from './modules/experiments/routes.js';
 import { LabService } from './modules/experiments/service.js';
 import { createReservationsRouter } from './modules/reservations/routes.js';
@@ -80,20 +81,24 @@ export function createApp(deps: AppDependencies): Express {
   // routers), but every one is behind `authenticate` — an unauthenticated caller never reaches the
   // allocation logic. These use concrete sub-prefixes so the `api`-level 404 still answers `/api/v1/*`
   // paths that match nothing here.
-  const requireAuth = authenticate(config, true);
+  const sessions = new SessionService(db);
+  const requireAuth = authenticate(config, true, sessions);
   const reservationsService = new ReservationsService(db, config, logger);
   const bookingsService = new BookingsService(db);
   api.use(`/${API_VERSION}/reservations`, requireAuth, createReservationsRouter(reservationsService));
   api.use(`/${API_VERSION}/bookings`, requireAuth, createBookingsRouter(bookingsService));
   api.use(`/${API_VERSION}/me`, requireAuth, createMeBookingsRouter(bookingsService));
 
+  // Phase-5 browser sessions (login/me/rotate/logout via HttpOnly cookie) are the UI's auth path
+  // and stay mounted even when the lab is off; the password-for-token demo exchange remains local-only.
+  api.use(`/${API_VERSION}/auth`, createSessionRouter(db, config));
+
   if (isLabEnabled(config)) {
-    // Local demo token exchange (spec-sanctioned test tokens); the browser session mechanism
-    // replaces it in Phase 5 behind the same `req.user` contract.
+    // Local demo token exchange (spec-sanctioned test tokens) for scripts and load-test actors.
     api.use(`/${API_VERSION}/auth`, createAuthRouter(db, config));
     api.use(
       `/${API_VERSION}/lab`,
-      authenticate(config, true),
+      authenticate(config, true, sessions),
       requireRole('LAB_ADMIN'),
       labGate,
       createLabRouter(new LabService(db, config, logger)),

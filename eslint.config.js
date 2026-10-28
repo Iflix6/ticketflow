@@ -40,6 +40,16 @@ export default tseslint.config(
     },
   },
   {
+    // Next.js app: pages run on server and client — expose both global sets.
+    files: ['apps/web/**/*.ts', 'apps/web/**/*.tsx', 'apps/web/**/*.mjs'],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+        ...globals.browser,
+      },
+    },
+  },
+  {
     // Operational scripts and tests may print to stdout for human-readable reports.
     files: ['scripts/**/*.ts', '**/test/**/*.ts', 'apps/worker/src/**/*.ts'],
     rules: {

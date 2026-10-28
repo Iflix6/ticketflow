@@ -24,6 +24,7 @@
     "seed": "tsx scripts/seed.ts",
     "dev:api": "tsx watch apps/api/src/server.ts",
     "dev:worker": "tsx watch apps/worker/src/main.ts",
+    "dev:web": "npm run dev --workspace @ticketflow/web",
     "start:api": "node apps/api/dist/server.js",
     "boot:smoke": "tsx scripts/boot-smoke.ts",
     "test": "npm run test:unit && npm run test:integration",
