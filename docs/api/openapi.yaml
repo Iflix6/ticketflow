@@ -1,0 +1,974 @@
+# TicketFlow Reliability Lab — HTTP contract
+#
+# Hand-maintained, and derived from the implemented routes (not from aspiration). Two guards keep it
+# honest: `tests/unit/openapi-contract.test.ts` fails if this document and the Express route table
+# disagree on operation count, error taxonomy or middleware-derived status codes, and
+# `tests/integration/openapi-parity.test.ts` requests every documented path for real so a stale entry
+# cannot survive. Status codes and error codes come from `packages/contracts/src/http.ts`.
+#
+# Scope honesty: this is the LOCAL LAB contract. Servers are 127.0.0.1 endpoints; credentials, ports and
+# demo accounts are synthetic — `scripts/seed.ts` is what creates them, and `docs/api/curl-examples.md`
+# uses those exact values. Nothing here is production deployment guidance.
+openapi: 3.1.0
+info:
+  title: TicketFlow Reliability Lab API
+  version: 1.0.0
+  description: |
+    Event-ticket booking laboratory. PostgreSQL is the single authoritative inventory source;
+    Redis/BullMQ (worker side) is advisory and never authorizes a sale.
+
+    Every response carries `x-request-id`. Every mutation on a customer route requires an
+    `Idempotency-Key` header. Errors always use the single envelope `{ error: { code, message,
+    details?, requestId, occurredAt } }`, including on `/health/ready` and on 404s inside `/api/v1`.
+  license: { name: Unlicensed (portfolio project), identifier: NO-license }
+servers:
+  - url: http://127.0.0.1:4000
+    description: Local API process (`npm run dev:api`, `PORT`/`HOST` from env)
+tags:
+  - name: health
+    description: Liveness and readiness; never rate limited.
+  - name: catalog
+    description: Public read-only event catalog and inventory projections.
+  - name: booking
+    description: Reservation lifecycle and fake checkout. Requires a bearer token.
+  - name: auth
+    description: Local demo token exchange. Mounted only when the lab is enabled.
+  - name: lab
+    description: Engineering Lab experiment control. Local/test only, LAB_ADMIN role required.
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health/live:
+    get:
+      operationId: getLiveness
+      tags: [health]
+      summary: Liveness — no dependency is touched
+      description: Answers while the event loop turns, even with PostgreSQL down. Restart decisions use this.
+      security: []
+      responses:
+        '200':
+          description: Process is alive.
+          headers:
+            x-request-id: { $ref: '#/components/headers/XRequestId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HealthResponse' }
+              example: { status: ok, component: api, version: 0.1.0 }
+
+  /health/ready:
+    get:
+      operationId: getReadiness
+      tags: [health]
+      summary: Readiness — PostgreSQL verified by real query, Redis probed advisively
+      description: |
+        `database` must be `ok` or the response is 503. `cache` is advisory (ADR-0002): an unreachable
+        Redis reports `degraded`, never `down`, and never fails readiness. Without a probe wired at all it
+        reports `skipped`.
+      security: []
+      responses:
+        '200':
+          description: Ready to accept booking traffic.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HealthResponse' }
+              example:
+                status: ok
+                component: api
+                detail: '{"database":"ok","cache":"ok"}'
+                version: 0.1.0
+        '503':
+          $ref: '#/components/responses/DependencyUnavailable'
+
+  /metrics:
+    get:
+      operationId: getMetrics
+      tags: [health]
+      summary: Prometheus exposition (only when METRICS_ENABLED=true)
+      description: |
+        Low-cardinality labels only (`route`, `method`, `status`, `strategy`, `outcome`, `pool_state`) —
+        never user id, booking id or request id. Route patterns are templated (`/api/v1/reservations/{id}`).
+      security: []
+      responses:
+        '200':
+          description: Prometheus text format.
+          content:
+            text/plain; version=0.0.4:
+              schema: { type: string }
+              example: |
+                ticketflow_http_requests_total{method="GET",route="/health/live",status="200"} 12
+
+  /api/v1/events:
+    get:
+      operationId: listEvents
+      tags: [catalog]
+      summary: Paginated event catalog
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/EventStatus' }
+      responses:
+        '200':
+          description: Event list.
+          headers:
+            x-request-id: { $ref: '#/components/headers/XRequestId' }
+            rate-limit-limit: { $ref: '#/components/headers/RateLimitLimit' }
+            rate-limit-remaining: { $ref: '#/components/headers/RateLimitRemaining' }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, pagination]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Event' } }
+                  pagination: { $ref: '#/components/schemas/Pagination' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/events/{id}:
+    get:
+      operationId: getEvent
+      tags: [catalog]
+      summary: One event
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/UuidId'
+      responses:
+        '200':
+          description: Event.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties: { data: { $ref: '#/components/schemas/Event' } }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/events/{id}/tiers:
+    get:
+      operationId: listEventTiers
+      tags: [catalog]
+      summary: Tiers with their advisory inventory projection
+      description: |
+        Inventory here is a READ projection. Allocation never trusts it — the reservation transaction
+        re-reads and conditionally updates `inventory` in PostgreSQL.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/UuidId'
+      responses:
+        '200':
+          description: Tiers with inventory counters.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/TierWithInventory' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/auth/token:
+    post:
+      operationId: exchangeDemoToken
+      tags: [auth]
+      summary: Local demo token exchange (lab-gated router)
+      description: |
+        Returns a bounded HMAC-signed bearer token for seeded local identities. NOT a production
+        authentication design: single-factor, no lockout, and this router is not mounted at all unless
+        the lab is enabled. The browser session mechanism (Phase 5) replaces it behind the same
+        `req.user` contract. Unknown user and wrong password return the same 401 to avoid enumeration.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 12, maxLength: 200 }
+      responses:
+        '200':
+          description: Token issued.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [token, tokenType, expiresInSeconds]
+                    properties:
+                      token: { type: string }
+                      tokenType: { type: string, const: Bearer }
+                      expiresInSeconds: { type: integer }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/reservations:
+    post:
+      operationId: createReservation
+      tags: [booking]
+      summary: Hold seats (strategy A/B/C)
+      description: |
+        The linearization point of a successful hold is the commit of ONE transaction that conditionally
+        updates `inventory`, inserts the `reservation` row, completes the idempotency record and writes
+        the outbox event. Clients never supply price, capacity or inventory values (strict body schema).
+
+        `Idempotency-Key` is mandatory. Same key + same body replays the committed outcome with
+        `idempotent-replay: true`; same key + different body is 409 `idempotency_key_reuse`; a key still
+        being processed is 409 `idempotency_in_progress`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateReservationRequest' }
+      responses:
+        '201':
+          description: Seats held.
+          headers:
+            idempotent-replay: { $ref: '#/components/headers/IdempotentReplay' }
+            x-request-id: { $ref: '#/components/headers/XRequestId' }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties: { data: { $ref: '#/components/schemas/Reservation' } }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409':
+          description: Sold out, concurrent conflict, or an idempotency-key problem.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              examples:
+                sold_out:
+                  value:
+                    error:
+                      code: sold_out
+                      message: No seats remain in this tier
+                      requestId: 7f2b...
+                      occurredAt: '2026-10-28T17:44:14.396Z'
+                idempotency_key_reuse:
+                  value:
+                    error:
+                      code: idempotency_key_reuse
+                      message: Idempotency-Key was already used with a different request body
+                      requestId: 7f2b...
+                      occurredAt: '2026-10-28T17:44:14.396Z'
+        '422':
+          description: Requested strategy is not available on public inventory — an unknown id or `unsafe_lab` (`strategy_unavailable`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/reservations/{id}:
+    get:
+      operationId: getReservation
+      tags: [booking]
+      summary: Read own reservation
+      description: |
+        Ownership is enforced by `ReservationsService.assertOwner`, which answers 403 `forbidden` when the
+        row belongs to someone else — NOT 404. Measured behaviour, with its consequence stated plainly: an
+        authenticated caller can learn that a reservation id exists. A `LAB_ADMIN` may read any reservation
+        (ADR-0009 lab convenience), which is why the role exception is part of this contract.
+      parameters:
+        - $ref: '#/components/parameters/UuidId'
+      responses:
+        '200':
+          description: Reservation.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties: { data: { $ref: '#/components/schemas/Reservation' } }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/OwnershipForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/reservations/{id}/cancel:
+    post:
+      operationId: cancelReservation
+      tags: [booking]
+      summary: Release a PENDING hold back to inventory
+      description: |
+        Conditional update guarded by `status = 'PENDING'`, so exactly one of cancel/confirm/expire wins.
+        Cancelling an already-CANCELED reservation is a no-op success (idempotent by resource, not only
+        by key). A terminal CONFIRMED/EXPIRED/FAILED reservation is 409 `invalid_transition`.
+      parameters:
+        - $ref: '#/components/parameters/UuidId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Canceled (or already canceled).
+          headers:
+            idempotent-replay: { $ref: '#/components/headers/IdempotentReplay' }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties: { data: { $ref: '#/components/schemas/Reservation' } }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/OwnershipForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/reservations/{id}/checkout:
+    post:
+      operationId: checkoutReservation
+      tags: [booking]
+      summary: Fake payment, then confirm / decline / stay pending
+      description: |
+        Deterministic fake provider — no real funds. Outcomes by simulated result:
+        success on a still-PENDING hold before its deadline → 201 CONFIRMED booking; already confirmed →
+        200 with the existing booking; failure → 200 with a FAILED booking and the seats returned;
+        timeout → 202 with the STILL-PENDING reservation, because the lab never marks money settled on an
+        ambiguous provider signal (the sweeper may expire it; a late success becomes a reconciliation
+        finding). A hold that already expired is 409 `reservation_not_confirmable` and is never resurrected.
+      parameters:
+        - $ref: '#/components/parameters/UuidId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CheckoutRequest' }
+      responses:
+        '200':
+          description: Existing confirmed booking, or a declined (FAILED) booking.
+          headers:
+            idempotent-replay: { $ref: '#/components/headers/IdempotentReplay' }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties: { data: { $ref: '#/components/schemas/Booking' } }
+        '201':
+          description: Booking confirmed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties: { data: { $ref: '#/components/schemas/Booking' } }
+        '202':
+          description: Payment outcome unknown (timeout) — reservation stays PENDING.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties: { data: { $ref: '#/components/schemas/Reservation' } }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/OwnershipForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/bookings/{id}:
+    get:
+      operationId: getBooking
+      tags: [booking]
+      summary: Read own booking
+      parameters:
+        - $ref: '#/components/parameters/UuidId'
+      responses:
+        '200':
+          description: Booking.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties: { data: { $ref: '#/components/schemas/Booking' } }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/OwnershipForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/me/bookings:
+    get:
+      operationId: listMyBookings
+      tags: [booking]
+      summary: Paginated bookings for the authenticated user
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Bookings.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, pagination]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Booking' } }
+                  pagination: { $ref: '#/components/schemas/Pagination' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/lab/strategies:
+    get:
+      operationId: listLabStrategies
+      tags: [lab]
+      summary: Strategy catalogue with the exact allocation SQL
+      description: |
+        `unsafe_lab` is only listed when the lab is enabled, so a public deployment cannot even discover
+        that the unsafe baseline exists.
+      responses:
+        '200':
+          description: Strategies.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/StrategyDescriptor' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/lab/runs:
+    get:
+      operationId: listLabRuns
+      tags: [lab]
+      summary: Paginated run history
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Runs.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, pagination]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/LabRun' } }
+                  pagination: { $ref: '#/components/schemas/Pagination' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+    post:
+      operationId: createLabRun
+      tags: [lab]
+      summary: Run one isolated experiment to completion
+      description: |
+        Executes SYNCHRONOUSLY against the isolated `lab` schema and returns the COMPLETED run with its
+        measured summary; public inventory is never touched (ADR-0009). Phase 5 decides whether this
+        becomes an async job with a progress stream.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateLabRunRequest' }
+      responses:
+        '201':
+          description: Completed run (or 201 with status FAILED if the run errored internally).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties: { data: { $ref: '#/components/schemas/LabRun' } }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/StrategyUnavailable' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/lab/runs/{id}:
+    get:
+      operationId: getLabRun
+      tags: [lab]
+      summary: One run (immutable summary after completion)
+      parameters:
+        - $ref: '#/components/parameters/UuidId'
+      responses:
+        '200':
+          description: Run.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties: { data: { $ref: '#/components/schemas/LabRun' } }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/lab/runs/{id}/results:
+    get:
+      operationId: listLabRunResults
+      tags: [lab]
+      summary: Per-attempt results (request timeline / failure explorer source)
+      parameters:
+        - $ref: '#/components/parameters/UuidId'
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 5000, default: 500 }
+      responses:
+        '200':
+          description: Results ordered by request index.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/ExperimentResult' } }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/lab/fixtures/reset:
+    post:
+      operationId: resetLabFixture
+      tags: [lab]
+      summary: Rebuild the isolated lab fixture
+      description: Uses the same `lab.reset_fixture(...)` SQL as the seed script and the tests.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FixtureResetRequest' }
+      responses:
+        '200':
+          description: Fixture rebuilt.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      capacity: { type: integer }
+                      tiers: { type: integer }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: HMAC-signed local demo token
+      description: '`Authorization: Bearer <token>` — see `/api/v1/auth/token`.'
+
+  parameters:
+    Page:
+      name: page
+      in: query
+      required: false
+      schema: { type: integer, minimum: 1, default: 1 }
+    PageSize:
+      name: pageSize
+      in: query
+      required: false
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    UuidId:
+      name: id
+      in: path
+      required: true
+      description: Validated as a UUID before it can reach a SQL parameter.
+      schema: { type: string, format: uuid }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: URL-safe, 8–128 characters. Missing → 400 `idempotency_key_missing`.
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 128
+        pattern: '^[A-Za-z0-9_-]+$'
+
+  headers:
+    XRequestId:
+      description: Correlation id; also present on every error body.
+      schema: { type: string }
+    IdempotentReplay:
+      description: Set to `true` when the committed outcome of an earlier request was re-served.
+      schema: { type: string, const: 'true' }
+    RateLimitLimit:
+      schema: { type: integer }
+    RateLimitRemaining:
+      schema: { type: integer }
+
+  responses:
+    ValidationError:
+      description: Body, query, path or header failed Zod validation (`validation_failed`).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          example:
+            error:
+              code: validation_failed
+              message: body validation failed
+              details: { body.quantity: 'Number must be greater than or equal to 1' }
+              requestId: 7f2b...
+              occurredAt: '2026-10-28T17:44:14.396Z'
+    Unauthorized:
+      description: Missing/invalid bearer token or credentials (`unauthorized`).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Forbidden:
+      description: Lab disabled or role insufficient (`lab_disabled` / `forbidden`).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    NotFound:
+      description: |
+        The row does not exist (`not_found`). Cross-owner access is NOT reported this way — reservation and
+        booking reads answer 403 `OwnershipForbidden` for a row that exists but belongs to someone else.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    OwnershipForbidden:
+      description: |
+        403 `forbidden`: the resource exists but another user owns it (`assertOwner` in the service layer).
+        Two consequences worth knowing before writing a client: (1) the caller learns the id is real, which
+        is a deliberate trade-off rather than a hardening guarantee; (2) a `LAB_ADMIN` token reads any
+        reservation or booking, so 403 is not a complete privacy boundary in a lab-enabled deployment.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Conflict:
+      description: |
+        409 with a specific cause: `sold_out`, `conflict`, `invalid_transition`,
+        `reservation_not_confirmable`, `idempotency_key_reuse`, `idempotency_in_progress`. Switch on
+        `error.code`, not on prose or status alone.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    StrategyUnavailable:
+      description: The requested strategy cannot run on this table (`strategy_unavailable`).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    RateLimited:
+      description: Too many requests in the window (`rate_limited`), with `retry-after`.
+      headers:
+        retry-after: { schema: { type: integer } }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    DependencyUnavailable:
+      description: Readiness only — PostgreSQL unreachable (`dependency_unavailable`).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  schemas:
+    EventStatus:
+      type: string
+      enum: [DRAFT, ON_SALE, SOLD_OUT, CANCELED, FINISHED]
+
+    HealthResponse:
+      type: object
+      required: [status, component]
+      properties:
+        status: { type: string, enum: [ok, degraded, down] }
+        component: { type: string }
+        detail: { type: string }
+        version: { type: string }
+
+    Pagination:
+      type: object
+      required: [page, pageSize, totalItems, totalPages]
+      properties:
+        page: { type: integer, minimum: 1 }
+        pageSize: { type: integer, minimum: 1, maximum: 200 }
+        totalItems: { type: integer, minimum: 0 }
+        totalPages: { type: integer, minimum: 0 }
+
+    Event:
+      type: object
+      required: [id, slug, title, description, startAt, status, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        slug: { type: string }
+        title: { type: string }
+        description: { type: string }
+        startAt: { type: string, format: date-time }
+        status: { $ref: '#/components/schemas/EventStatus' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    TicketTier:
+      type: object
+      required: [id, eventId, name, priceDisplayOnly, currency, capacity, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        eventId: { type: string, format: uuid }
+        name: { type: string }
+        priceDisplayOnly:
+          type: string
+          pattern: '^\d+(\.\d{1,2})?$'
+          description: Exact decimal string. Display only — never accepted from a client.
+        currency: { type: string, minLength: 3, maxLength: 3 }
+        capacity: { type: integer, minimum: 0 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    Inventory:
+      type: object
+      required: [tierId, capacity, available, reserved, sold, version, updatedAt]
+      properties:
+        tierId: { type: string, format: uuid }
+        capacity: { type: integer, minimum: 0 }
+        available: { type: integer, minimum: 0 }
+        reserved: { type: integer, minimum: 0 }
+        sold: { type: integer, minimum: 0 }
+        version: { type: integer, minimum: 0 }
+        updatedAt: { type: string, format: date-time }
+
+    TierWithInventory:
+      type: object
+      required: [tier, inventory]
+      properties:
+        tier: { $ref: '#/components/schemas/TicketTier' }
+        inventory: { $ref: '#/components/schemas/Inventory' }
+
+    ReservationStatus:
+      type: string
+      enum: [PENDING, CONFIRMED, EXPIRED, CANCELED, FAILED]
+
+    Reservation:
+      type: object
+      required: [id, userId, tierId, quantity, status, expiresAt, secondsRemaining, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        tierId: { type: string, format: uuid }
+        quantity: { type: integer, minimum: 1 }
+        status: { $ref: '#/components/schemas/ReservationStatus' }
+        expiresAt: { type: string, format: date-time, description: Compared against DATABASE time, never the client clock. }
+        secondsRemaining: { type: integer, minimum: 0, description: Server-derived so a countdown needs no client clock. }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    BookingStatus:
+      type: string
+      enum: [PENDING_PAYMENT, CONFIRMED, CANCELED, FAILED]
+
+    Booking:
+      type: object
+      required: [id, reservationId, status, totalAmount, currency, createdAt, confirmedAt]
+      properties:
+        id: { type: string, format: uuid }
+        reservationId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/BookingStatus' }
+        totalAmount: { type: string, pattern: '^\d+(\.\d{1,2})?$' }
+        currency: { type: string, minLength: 3, maxLength: 3 }
+        createdAt: { type: string, format: date-time }
+        confirmedAt: { type: [string, 'null'], format: date-time }
+
+    CreateReservationRequest:
+      type: object
+      additionalProperties: false
+      required: [tierId, quantity]
+      properties:
+        tierId: { type: string, format: uuid }
+        quantity: { type: integer, minimum: 1, maximum: 100, description: Also bounded by MAX_QUANTITY_PER_RESERVATION (default 10); exceeding it is 400. }
+        strategy:
+          # Deliberately NOT an enum: the Zod contract is `z.string().min(1).max(40).optional()`, so an
+          # unrecognised id passes validation and is refused by the service with 422. Documenting it as an
+          # enum would wrongly predict a 400 for e.g. `quantum_tunneling` — see
+          # tests/integration/comparative-strategies.test.ts, which asserts 422 for both an unknown id and
+          # `unsafe_lab`.
+          type: string
+          minLength: 1
+          maxLength: 40
+          default: atomic_update
+          description: Known-safe ids are `atomic_update`, `pessimistic`, `optimistic`. Anything else (including `unsafe_lab`) is 422 `strategy_unavailable`.
+        reservationTtlSeconds: { type: integer, minimum: 5, maximum: 86400 }
+
+    # Both fields carry Zod `.default(...)` values, so an empty object `{}` is a VALID checkout body.
+    # They are therefore not `required` here: `required` would overstate what a client must send.
+    CheckoutRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        simulatedOutcome: { type: string, enum: [success, failure, timeout], default: success }
+        delayMs: { type: integer, minimum: 0, maximum: 30000, default: 0 }
+
+    StrategyDescriptor:
+      type: object
+      required: [id, label, summary, sql, safe, labOnly, tradeoffs]
+      properties:
+        id: { type: string, enum: [atomic_update, pessimistic, optimistic, unsafe_lab] }
+        label: { type: string }
+        summary: { type: string }
+        sql: { type: string, description: The exact allocation SQL, surfaced so claims stay inspectable. }
+        safe: { type: boolean }
+        labOnly: { type: boolean }
+        tradeoffs: { type: array, items: { type: string } }
+
+    LabRunConfiguration:
+      type: object
+      additionalProperties: false
+      required: [capacity, concurrentUsers]
+      properties:
+        capacity: { type: integer, minimum: 1, maximum: 100000 }
+        concurrentUsers: { type: integer, minimum: 1, maximum: 5000 }
+        quantityPerUser: { type: integer, minimum: 1, maximum: 100, default: 1 }
+        rampMs: { type: integer, minimum: 0, maximum: 600000, default: 0, description: '0 = barrier start: every attempt fires together.' }
+        artificialDelayMs: { type: integer, minimum: 0, maximum: 5000, default: 0, description: Widens the unsafe read-modify-write window. }
+        reservationTtlSeconds: { type: integer, minimum: 5, maximum: 86400, default: 300 }
+        seed: { type: integer, minimum: 0, default: 42, description: Deterministic RNG so runs are comparable across strategies. }
+        dbPoolMax: { type: integer, minimum: 1, maximum: 200, default: 20 }
+        isolation: { type: string, enum: [read_committed, repeatable_read, serializable], default: read_committed }
+
+    CreateLabRunRequest:
+      type: object
+      additionalProperties: false
+      required: [strategy, configuration]
+      properties:
+        strategy: { type: string, enum: [atomic_update, pessimistic, optimistic, unsafe_lab] }
+        configuration: { $ref: '#/components/schemas/LabRunConfiguration' }
+        # `.optional()`, NOT `.nullable()` — a client cannot send `label: null`.
+        label: { type: string, minLength: 1, maxLength: 120 }
+
+    LabRunOutcomes:
+      type: object
+      required: [attempted, succeeded, soldOut, conflict, duplicate, validationError, serverError, timeout, throughputPerSecond, p50Ms, p95Ms, p99Ms, durationMs, invariantViolations]
+      properties:
+        attempted: { type: integer, minimum: 0 }
+        succeeded: { type: integer, minimum: 0 }
+        soldOut: { type: integer, minimum: 0 }
+        conflict: { type: integer, minimum: 0 }
+        duplicate: { type: integer, minimum: 0 }
+        validationError: { type: integer, minimum: 0 }
+        serverError: { type: integer, minimum: 0 }
+        timeout: { type: integer, minimum: 0 }
+        throughputPerSecond: { type: [number, 'null'] }
+        p50Ms: { type: [number, 'null'] }
+        p95Ms: { type: [number, 'null'] }
+        p99Ms: { type: [number, 'null'] }
+        durationMs: { type: [integer, 'null'], minimum: 0 }
+        invariantViolations:
+          type: integer
+          minimum: 0
+          description: Violating ROWS in `lab.live_allocation_violations`, not the number of over-sold seats.
+
+    LabRun:
+      type: object
+      required: [id, strategy, status, configuration, startedAt, finishedAt, gitSha, environment, outcomes, reportPaths]
+      properties:
+        id: { type: string, format: uuid }
+        strategy: { type: string, enum: [atomic_update, pessimistic, optimistic, unsafe_lab] }
+        status: { type: string, enum: [PENDING, RUNNING, COMPLETED, FAILED, ABORTED] }
+        configuration: { $ref: '#/components/schemas/LabRunConfiguration' }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: [string, 'null'], format: date-time }
+        gitSha: { type: [string, 'null'], description: Populated from GIT_SHA only; null in a plain local run. }
+        environment: { type: string, description: NODE_ENV the run executed under. }
+        outcomes: { oneOf: [{ $ref: '#/components/schemas/LabRunOutcomes' }, { type: 'null' }] }
+        reportPaths: { type: array, items: { type: string } }
+
+    ExperimentResult:
+      type: object
+      required: [id, runId, requestIndex, actorLabel, outcome, httpStatus, latencyMicros, failureClass, correlationId, createdAt]
+      properties:
+        # `z.bigint()` on both id columns, stringified by `toExperimentResultView` so a 64-bit value
+        # survives JSON without losing precision to a float.
+        id: { type: string, pattern: '^\d+$', description: bigint, serialized as a decimal string. }
+        runId: { type: string, format: uuid }
+        requestIndex: { type: integer, minimum: 0 }
+        actorLabel: { type: string }
+        outcome: { type: string, enum: [SUCCEEDED, SOLD_OUT, CONFLICT, DUPLICATE, VALIDATION_ERROR, SERVER_ERROR, TIMEOUT] }
+        httpStatus: { type: [integer, 'null'] }
+        latencyMicros: { type: string, pattern: '^\d+$', description: bigint microseconds; string to survive JSON exactly. }
+        failureClass:
+          type: string
+          enum: [none, lost_update_overallocation, invariant_violation_failed_insert, negative_available, duplicate_booking, idempotency_violation, deadlock, timeout, unknown]
+        correlationId: { type: string }
+        createdAt: { type: string, format: date-time }
+
+    # Both fields default (capacity 100, tiers 1), so `{}` is a valid reset body.
+    FixtureResetRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        capacity: { type: integer, minimum: 1, maximum: 100000, default: 100 }
+        tiers: { type: integer, minimum: 1, maximum: 10, default: 1 }
+
+    ErrorBody:
+      type: object
+      required: [code, message, requestId, occurredAt]
+      properties:
+        code:
+          type: string
+          enum:
+            - validation_failed
+            - unauthorized
+            - forbidden
+            - not_found
+            - sold_out
+            - conflict
+            - idempotency_key_missing
+            - idempotency_key_reuse
+            - idempotency_in_progress
+            - invalid_transition
+            - reservation_not_confirmable
+            - rate_limited
+            - lab_disabled
+            - strategy_unavailable
+            - dependency_unavailable
+            - internal_error
+        message: { type: string }
+        details:
+          type: object
+          additionalProperties: true
+          description: Machine-readable, non-sensitive, never PII. May carry `sqlstate` from PostgreSQL.
+        requestId: { type: string }
+        occurredAt: { type: string, format: date-time }
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties: { error: { $ref: '#/components/schemas/ErrorBody' } }

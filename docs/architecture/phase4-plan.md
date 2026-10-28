@@ -1,6 +1,6 @@
 # Phase 4 — Async processing, outbox relay, recovery
 
-Status: in progress. Implements ADR-0005 (queues + transactional outbox) and ADR-0002 (PostgreSQL is
+Status: **done**. Implements ADR-0005 (queues + transactional outbox) and ADR-0002 (PostgreSQL is
 the source of truth; Redis is advisory). Gate: *recover from worker restarts and duplicate delivery
 without violating invariants.*
 
@@ -74,3 +74,21 @@ The relay and the dispatch consumer accept an optional injected failure hook. Te
 Integration suites (gated on real PostgreSQL **and** real Redis, skipped honestly otherwise):
 `tests/integration/outbox-relay.test.ts`, `expiry-sweeper.test.ts`, `worker-recovery.test.ts`. Each
 asserts against the independent `app.*_violations` views after the churn, never on HTTP counts alone.
+
+Measured on this checkout, against live PostgreSQL 18.6 **and** live Redis (no suite self-skipped):
+
+```
+npx vitest run --config vitest.integration.config.ts \
+  tests/integration/outbox-relay.test.ts tests/integration/worker-recovery.test.ts \
+  tests/integration/expiry-sweeper.test.ts        # vitest 3.2.7, Node v26.1.0
+  ✓ worker-recovery.test.ts        9 passed
+  ✓ outbox-relay.test.ts          11 passed  (1783 ms)
+  ✓ expiry-sweeper.test.ts         5 passed  (1440 ms)
+  Test Files 3 passed (3)   Tests 25 passed (25)   Duration 24.94 s
+```
+
+---
+
+Previous: [Phase 3 — Comparative strategies and the isolated unsafe lab](phase3-plan.md) ·
+Source of truth: [Ticketflow-Requirements-Prompt-Pack.md](../../Ticketflow-Requirements-Prompt-Pack.md)
+(Phases 5+ are not implemented yet, so no later phase doc exists).

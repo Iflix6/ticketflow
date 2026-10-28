@@ -138,3 +138,8 @@ k6 run load-tests/scenarios/competing-buyers.js -e STRATEGY=atomic_update   # Ph
 - Identifier strategy → UUIDv7 for time-clustered primary keys; `gen_random_uuid()` fallback to v4 if
   PG lacks v7 support; verified against the pinned image.
 - Metric cardinality → labels limited to `route`, `method`, `status`, `strategy`, `outcome`, `pool_state`.
+
+---
+
+Next: [Phase 1 — Foundation: monorepo, schema, boot path, CI](phase1-plan.md) ·
+Source of truth: [Ticketflow-Requirements-Prompt-Pack.md](../../Ticketflow-Requirements-Prompt-Pack.md)
