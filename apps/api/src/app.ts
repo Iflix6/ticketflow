@@ -16,6 +16,7 @@ import { EventsRepository } from './modules/events/repository.js';
 import { EventsService } from './modules/events/service.js';
 import { createAuthRouter } from './modules/auth/routes.js';
 import { createLabRouter } from './modules/experiments/routes.js';
+import { LabService } from './modules/experiments/service.js';
 import { createReservationsRouter } from './modules/reservations/routes.js';
 import { ReservationsService } from './modules/reservations/service.js';
 import { createBookingsRouter, createMeBookingsRouter } from './modules/bookings/routes.js';
@@ -95,7 +96,7 @@ export function createApp(deps: AppDependencies): Express {
       authenticate(config, true),
       requireRole('LAB_ADMIN'),
       labGate,
-      createLabRouter(config),
+      createLabRouter(new LabService(db, config, logger)),
     );
   }
 

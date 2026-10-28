@@ -5,6 +5,7 @@ import type {
   ErrorCode,
   ReservationDto,
 } from '@ticketflow/contracts';
+import { SAFE_STRATEGY_IDS } from '@ticketflow/contracts';
 import type { AppConfig } from '@ticketflow/config';
 import type { Database, Queryable } from '../../db/pool.js';
 import { asQueryable } from '../../db/pool.js';
@@ -23,6 +24,8 @@ import { charge as fakeCharge, type ChargeResult } from '../payments/fake-provid
 import { recordReconciliationFinding } from '../bookings/reconciliation.js';
 import { findBookingByReservation, insertBooking, insertPaymentAttempt } from '../bookings/repository.js';
 import {
+  allocateOptimistic,
+  allocatePessimistic,
   cancelReservation as cancelReservationRow,
   commitReservedToSold,
   confirmReservation as confirmReservationRow,
@@ -35,6 +38,7 @@ import {
   listReservationsForUser,
   releaseReserved,
   tryAllocate,
+  type AllocationResult,
   type ReservationRow,
 } from './repository.js';
 
@@ -60,6 +64,12 @@ export interface ServiceResult<TData> {
 const ENDPOINT_CREATE = 'POST /api/v1/reservations';
 const cancelEndpoint = (id: string): string => `POST /api/v1/reservations/${id}/cancel`;
 const checkoutEndpoint = (id: string): string => `POST /api/v1/reservations/${id}/checkout`;
+
+/**
+ * Strategies the customer (public-inventory) path accepts. The unsafe baseline is deliberately absent:
+ * it must never run against live inventory (ADR-0009); it exists only inside the isolated lab fixture.
+ */
+const PUBLIC_STRATEGIES = new Set<string>(SAFE_STRATEGY_IDS);
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -98,11 +108,14 @@ export class ReservationsService {
       );
     }
     const strategy = request.strategy ?? 'atomic_update';
-    // Phase 2 implements Safe A only; pessimistic/optimistic/unsafe arrive in Phase 3.
-    if (strategy !== 'atomic_update') {
-      throw new AppError('strategy_unavailable', `Strategy ${strategy} is not implemented in this phase`, {
-        strategy,
-      });
+    // Phase 3: Safe A/B/C are available to customers. Any other id (including `unsafe_lab`) is refused
+    // before a transaction opens, so the unsafe baseline can never touch public inventory.
+    if (!PUBLIC_STRATEGIES.has(strategy)) {
+      throw new AppError(
+        'strategy_unavailable',
+        `Strategy ${strategy} is not available on public inventory`,
+        { strategy, allowed: [...PUBLIC_STRATEGIES] },
+      );
     }
     const ttlSeconds = request.reservationTtlSeconds ?? this.config.RESERVATION_TTL_SECONDS;
     const requestHash = hashRequestPayload({
@@ -132,13 +145,22 @@ export class ReservationsService {
         });
       }
 
-      const counters = await tryAllocate(client, request.tierId, request.quantity);
-      if (counters === null) {
+      const allocation = await this.allocate(client, strategy, request.tierId, request.quantity);
+      if (allocation.kind === 'sold_out') {
         // Sold out is not a committed outcome: throw so the transaction (and the IN_PROGRESS key row)
         // rolls back and a later retry — after an expiry frees seats — can still succeed.
         appMetrics.reservationOutcomes.inc({ strategy, outcome: 'sold_out' });
         throw new AppError('sold_out', 'No tickets are available for that tier');
       }
+      if (allocation.kind === 'conflict') {
+        // Optimistic retry budget exhausted while seats remained: a transient contention signal, not a
+        // business rejection. Roll back (freeing the key) so the client may retry immediately.
+        appMetrics.reservationOutcomes.inc({ strategy, outcome: 'conflict' });
+        throw new AppError('conflict', 'Inventory changed concurrently; retry the reservation', {
+          attempts: allocation.attempts,
+        });
+      }
+      const counters = allocation.counters;
 
       const reservation = await insertReservation(client, {
         userId: user.id,
@@ -159,6 +181,10 @@ export class ReservationsService {
           quantity: request.quantity,
           status: 'PENDING',
           strategy,
+          // Post-allocation counters, captured in the same transaction — useful for the event consumer
+          // and for reconciling an advisory cache without a second read.
+          availableAfter: counters.available,
+          reservedAfter: counters.reserved,
         },
       });
       await recordAudit(client, {
@@ -471,6 +497,27 @@ export class ReservationsService {
   }
 
   // -------------------------------------------------- shared internals ----
+  /**
+   * Chooses the allocation primitive for the requested strategy. Each returns the same discriminated
+   * {@link AllocationResult} so the caller handles sold-out / conflict uniformly. The strategy id is
+   * validated against {@link PUBLIC_STRATEGIES} before this runs, so the default branch is unreachable.
+   */
+  private async allocate(
+    client: Queryable,
+    strategy: string,
+    tierId: string,
+    quantity: number,
+  ): Promise<AllocationResult> {
+    if (strategy === 'atomic_update') {
+      const counters = await tryAllocate(client, tierId, quantity);
+      return counters === null ? { kind: 'sold_out' } : { kind: 'allocated', counters };
+    }
+    if (strategy === 'pessimistic') {
+      return allocatePessimistic(client, tierId, quantity);
+    }
+    return allocateOptimistic(client, tierId, quantity);
+  }
+
   private handleAcquisition(
     acquisition: IdempotencyAcquisition,
   ): { kind: 'replay'; result: ServiceResult<never> } | { kind: 'new'; recordId: string } {

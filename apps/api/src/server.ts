@@ -4,6 +4,7 @@ import { bootstrapConfig, ConfigError } from '@ticketflow/config';
 import { createApp } from './app.js';
 import { bindPoolMetrics, createDatabase } from './db/pool.js';
 import { createLogger } from './observability/logger.js';
+import { makeRedisProbe } from './redis-probe.js';
 
 /**
  * API process entry point.
@@ -32,7 +33,9 @@ function main(): void {
   const db = createDatabase(config);
   const poolMetricsTimer = bindPoolMetrics(db);
 
-  const app = createApp({ config, db, logger });
+  // Redis is advisory for readiness (ADR-0002/0005): the probe reflects reachability without pulling
+  // the queue client into the API, and its absence degrades `/health/ready` rather than failing it.
+  const app = createApp({ config, db, logger, pingRedis: makeRedisProbe(config.REDIS_URL) });
   const server = http.createServer(app);
 
   server.listen(config.PORT, config.HOST, () => {

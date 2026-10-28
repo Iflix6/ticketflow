@@ -77,6 +77,21 @@ const RESERVATION_COLUMNS = `
   id, user_id, tier_id, quantity, status, strategy, expires_at, created_at, updated_at,
   GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (expires_at - app.now())))::int) AS seconds_remaining`;
 
+/**
+ * Discriminated result of an allocation attempt. Every strategy returns this so the service can map
+ * `sold_out` (a genuine business rejection) and `conflict` (an optimistic retry budget exhausted while
+ * seats still existed) to DIFFERENT outcomes. Conflating them is the classic way a load test hides bugs.
+ */
+export type AllocationResult =
+  | { readonly kind: 'allocated'; readonly counters: InventoryCounters }
+  | { readonly kind: 'sold_out' }
+  | { readonly kind: 'conflict'; readonly attempts: number };
+
+/** Bound for the optimistic in-transaction retry loop (Safe C). Conflict is expected under contention. */
+export const OPTIMISTIC_MAX_ATTEMPTS = 5;
+
+const nap = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
 /** Safe A allocation: test-and-mutate in one statement. `null` means the guard failed (sold out). */
 export async function tryAllocate(
   client: Queryable,
@@ -93,6 +108,86 @@ export async function tryAllocate(
     [tierId, quantity],
   );
   return result.rows[0] ?? null;
+}
+
+/**
+ * Safe B (pessimistic): take the row lock first, decide in the application from a stable snapshot,
+ * then write. The `FOR UPDATE` is the serialization point — once held, no other transaction can move
+ * the counters until we commit, so the check-then-write window is race-free. The update itself is
+ * still a guarded relative write (never a blind assignment) so a coding slip cannot corrupt counters.
+ */
+export async function allocatePessimistic(
+  client: Queryable,
+  tierId: string,
+  quantity: number,
+): Promise<AllocationResult> {
+  const locked = await client.query<InventoryCounters>(
+    `SELECT available, reserved, sold, version FROM inventory WHERE tier_id = $1 FOR UPDATE`,
+    [tierId],
+  );
+  const snapshot = locked.rows[0];
+  if (snapshot === undefined) {
+    throw new Error(`pessimistic lock found no inventory row for tier ${tierId}`);
+  }
+  if (snapshot.available < quantity) return { kind: 'sold_out' };
+
+  const updated = await client.query<InventoryCounters>(
+    `UPDATE inventory
+        SET available = available - $2,
+            reserved  = reserved + $2,
+            version   = version + 1
+      WHERE tier_id = $1
+      RETURNING available, reserved, sold, version`,
+    [tierId, quantity],
+  );
+  const counters = updated.rows[0];
+  if (counters === undefined) throw new Error(`pessimistic allocation update returned no row for tier ${tierId}`);
+  return { kind: 'allocated', counters };
+}
+
+/**
+ * Safe C (optimistic): read the version, then attempt a compare-and-set `WHERE version = $expected`.
+ * Zero rows means the row changed under us (a concurrent committed allocation) — re-read and retry,
+ * bounded, with jitter so synchronized losers do not re-collide. A failed re-read that shows
+ * `available < quantity` is sold out, not a conflict, so we stop retrying immediately.
+ *
+ * Under READ COMMITTED the UPDATE blocks on an in-flight competitor's row lock, then re-evaluates
+ * `version` against the just-committed row — so the loop resolves as competitors commit rather than
+ * busy-spinning. Exhausting the budget while seats remain reports `conflict` (retryable by the caller).
+ */
+export async function allocateOptimistic(
+  client: Queryable,
+  tierId: string,
+  quantity: number,
+  maxAttempts: number = OPTIMISTIC_MAX_ATTEMPTS,
+  random: () => number = Math.random,
+): Promise<AllocationResult> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const current = await client.query<{ available: number; version: number }>(
+      `SELECT available, version FROM inventory WHERE tier_id = $1`,
+      [tierId],
+    );
+    const row = current.rows[0];
+    if (row === undefined) {
+      throw new Error(`optimistic read found no inventory row for tier ${tierId}`);
+    }
+    if (row.available < quantity) return { kind: 'sold_out' };
+
+    const updated = await client.query<InventoryCounters>(
+      `UPDATE inventory
+          SET available = available - $3,
+              reserved  = reserved + $3,
+              version   = version + 1
+        WHERE tier_id = $1 AND version = $2 AND available >= $3
+        RETURNING available, reserved, sold, version`,
+      [tierId, row.version, quantity],
+    );
+    const counters = updated.rows[0];
+    if (counters !== undefined) return { kind: 'allocated', counters };
+
+    if (attempt < maxAttempts) await nap(Math.floor(random() * 5));
+  }
+  return { kind: 'conflict', attempts: maxAttempts };
 }
 
 export async function insertReservation(
