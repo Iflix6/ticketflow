@@ -210,7 +210,8 @@ export function BookingPanel({ tier, userName }: { tier: TierWithInventory; user
                 <option value="timeout">timeout</option>
               </select>
             </div>
-            <button type="button" onClick={() => void checkout()} className="rounded bg-green-700 px-3 py-1.5 text-sm text-white hover:bg-green-800 disabled:opacity-50" disabled={phase === 'paying'}>
+            {/* No disabled flag needed: starting checkout/cancel flips the phase, which unmounts these buttons. */}
+            <button type="button" onClick={() => void checkout()} className="rounded bg-green-700 px-3 py-1.5 text-sm text-white hover:bg-green-800">
               Pay now
             </button>
             <button type="button" onClick={() => void cancel()} className="rounded border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100">

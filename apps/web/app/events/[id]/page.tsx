@@ -1,4 +1,4 @@
-import { serverApi } from '../../../lib/api';
+import { serverApi } from '../../../lib/server-api';
 import { ErrorPanel } from '../../../components/ErrorPanel';
 import { BookingPanel } from '../../../components/BookingPanel';
 import { getSessionUser } from '../../../lib/session';

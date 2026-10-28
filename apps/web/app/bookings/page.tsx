@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { serverApi, isApiCallError } from '../../lib/api';
+import { serverApi, isApiCallError } from '../../lib/server-api';
 import { ErrorPanel, EmptyState } from '../../components/ErrorPanel';
 import { getSessionUser } from '../../lib/session';
 import type { BookingDto } from '../../lib/types';

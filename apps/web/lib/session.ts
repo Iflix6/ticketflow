@@ -1,4 +1,4 @@
-import { serverApi, isApiCallError } from './api';
+import { serverApi, isApiCallError } from './server-api';
 import type { SessionUser } from './types';
 
 /**

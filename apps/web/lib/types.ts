@@ -17,7 +17,6 @@ import type {
   ReservationDto,
   StrategyDescriptorDto,
   TicketTierDto,
-  UserRole,
 } from '@ticketflow/contracts';
 
 export type {
@@ -29,8 +28,14 @@ export type {
   ReservationDto,
   StrategyDescriptorDto,
   TicketTierDto,
-  UserRole,
 };
+
+/**
+ * Roles are an API-side concern (apps/api/src/modules/auth/types.ts); contracts does not export
+ * them. This union mirrors the 0003 migration's CHECK constraint verbatim — if a role is ever
+ * added there, the session endpoint responses will make the mismatch visible here.
+ */
+export type UserRole = 'CUSTOMER' | 'LAB_ADMIN';
 
 export interface SessionUser {
   id: string;

@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { serverApi } from '../../lib/api';
+import { serverApi } from '../../lib/server-api';
 import { ErrorPanel, EmptyState } from '../../components/ErrorPanel';
 import type { EventDto } from '../../lib/types';
 
