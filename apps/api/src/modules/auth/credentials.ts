@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID, scrypt, scryptSync, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import { AppError } from '../../shared/errors.js';
 import type { AuthenticatedUser, TokenPayload, UserRole } from './types.js';
@@ -29,6 +29,19 @@ const scryptAsync = promisify(scrypt) as unknown as (
 const SCRYPT_OPTIONS = { N: 16384, r: 8, p: 1 } as const;
 const SCRYPT_KEYLEN = 32;
 const PREFIX = 'scrypt';
+
+/**
+ * A correctly formatted scrypt hash of a throwaway random value, built once at module load. Its
+ * content is meaningless and it is never a valid login; it exists only so the "unknown account" and
+ * "token-only demo identity" branches of login do the SAME scrypt work as a real password check.
+ * Without it those branches return immediately, and the response-time gap is enough to enumerate
+ * which emails have a password account (see `authenticateCredentials`).
+ */
+export const DUMMY_PASSWORD_HASH: string = (() => {
+  const salt = randomBytes(16);
+  const derived = scryptSync(randomBytes(32), salt, SCRYPT_KEYLEN, SCRYPT_OPTIONS);
+  return `${PREFIX}$${SCRYPT_OPTIONS.N}$${SCRYPT_OPTIONS.r}$${SCRYPT_OPTIONS.p}$${salt.toString('base64')}$${derived.toString('base64')}`;
+})();
 
 export async function hashPassword(password: string): Promise<string> {
   if (password.length < 12) {

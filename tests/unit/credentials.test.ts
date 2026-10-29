@@ -5,6 +5,7 @@ import {
   verifyPassword,
   verifyToken,
   hashPassword,
+  DUMMY_PASSWORD_HASH,
 } from '../../apps/api/src/modules/auth/credentials.js';
 import { AppError } from '../../apps/api/src/shared/errors.js';
 import type { AuthenticatedUser } from '../../apps/api/src/modules/auth/types.js';
@@ -36,6 +37,19 @@ describe('password hashing (scrypt)', () => {
     const b = await hashPassword('the same long password');
     expect(a).not.toBe(b);
     expect(await verifyPassword('the same long password', b)).toBe(true);
+  });
+
+  it('exposes a well-formed dummy hash so the unknown-account login branch costs real scrypt work', async () => {
+    // SEC-1 regression guard: `authenticateCredentials` verifies against DUMMY_PASSWORD_HASH when no
+    // live password row exists, so an unknown email is not distinguishable from a wrong password by
+    // timing. The dummy must (a) parse as a genuine scrypt hash so the KDF actually runs, and (b) never
+    // match, and (c) be structurally identical to a real hash (same prefix/params/segment count).
+    expect(DUMMY_PASSWORD_HASH).toMatch(/^scrypt\$16384\$8\$1\$/);
+    expect(DUMMY_PASSWORD_HASH.split('$')).toHaveLength(6);
+    expect(await verifyPassword('anything at all here', DUMMY_PASSWORD_HASH)).toBe(false);
+    expect(await verifyPassword('', DUMMY_PASSWORD_HASH)).toBe(false);
+    const real = await hashPassword('a genuine long password');
+    expect(real.split('$')).toHaveLength(DUMMY_PASSWORD_HASH.split('$').length);
   });
 });
 

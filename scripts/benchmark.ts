@@ -29,6 +29,7 @@ interface Args {
   base: string;
   tierId: string;
   eventQuery: string;
+  eventSlug: string;
   email: string;
   password: string;
   users: number;
@@ -68,6 +69,7 @@ function parseArgs(argv: readonly string[]): Args {
     base: get('base', 'http://127.0.0.1:4000').replace(/\/$/, ''),
     tierId: get('tier', ''),
     eventQuery: get('event-index', '0'),
+    eventSlug: get('event-slug', ''),
     email: get('email', 'customer@local.test'),
     password: get('password', 'local-demo-customer-2026'),
     users: num('users', 1000),
@@ -150,9 +152,20 @@ function classifyReserve(status: number, body: unknown): string {
 async function resolveTier(args: Args, token: string): Promise<{ tierId: string; available: number; capacity: number }> {
   const events = await call(args.base, 'GET', '/api/v1/events', {});
   const list = Array.isArray(asRecord(events.json).data) ? (asRecord(events.json).data as unknown[]) : [];
-  const eventIndex = Math.min(list.length - 1, Number(args.eventQuery));
-  const eventId = String(asRecord(list[eventIndex]).id);
-  if (eventId === 'undefined') throw new Error('no events found; run `npm run seed` first');
+  // Prefer an explicit, stable slug (the flagship fixture is `lab-flagship-1000-vs-100`): it is the
+  // documented, reproducible selector. Fall back to list index only when no slug is supplied.
+  const event =
+    args.eventSlug !== ''
+      ? list.find((e) => String(asRecord(e).slug) === args.eventSlug)
+      : list[Math.min(list.length - 1, Number(args.eventQuery))];
+  const eventId = String(asRecord(event).id);
+  if (eventId === 'undefined') {
+    throw new Error(
+      args.eventSlug !== ''
+        ? `no event with slug "${args.eventSlug}"; run \`npm run seed -- --experiment\` first`
+        : 'no events found; run `npm run seed` first',
+    );
+  }
 
   const tiers = await call(args.base, 'GET', `/api/v1/events/${eventId}/tiers`, { token });
   const tierRows = Array.isArray(asRecord(tiers.json).data) ? (asRecord(tiers.json).data as unknown[]) : [];
@@ -218,9 +231,13 @@ async function main(): Promise<void> {
       const index = next++;
       if (index >= args.users) return;
 
+      // Idempotency keys are salted with this run's unique `stamp` so a re-run is a clean, repeatable
+      // comparison. Reusing fixed keys across runs makes the API return 409 idempotency_key_reuse for
+      // earlier reservations, silently turning part of the measured load into cached replays instead of
+      // fresh contention — which would make two nominally identical runs non-comparable.
       const reserve = await call(args.base, 'POST', '/api/v1/reservations', {
         token,
-        idemKey: `bench-reserve-${index}`,
+        idemKey: `bench-${stamp}-reserve-${index}`,
         body: { tierId: tier.tierId, quantity: args.quantity },
       });
       const rOutcome = classifyReserve(reserve.status, reserve.json);
@@ -235,7 +252,7 @@ async function main(): Promise<void> {
 
       const checkout = await call(args.base, 'POST', `/api/v1/reservations/${reservationId}/checkout`, {
         token,
-        idemKey: `bench-checkout-${index}`,
+        idemKey: `bench-${stamp}-checkout-${index}`,
         body: { simulatedOutcome: args.outcome },
       });
       checkoutLatencies.push(checkout.latencyMs);

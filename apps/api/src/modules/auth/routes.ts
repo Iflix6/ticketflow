@@ -6,7 +6,7 @@ import { asyncHandler } from '../../middleware/request-context.js';
 import { sendJson } from '../../shared/respond.js';
 import { parseBody } from '../../shared/validation.js';
 import { AppError } from '../../shared/errors.js';
-import { issueToken, verifyPassword, verifyToken } from './credentials.js';
+import { DUMMY_PASSWORD_HASH, issueToken, verifyPassword, verifyToken } from './credentials.js';
 import { SESSION_COOKIE, SessionService, parseCookie, sessionCookie } from './sessions.js';
 import type { UserRole } from './types.js';
 
@@ -40,6 +40,10 @@ type UserRow = {
 /**
  * One generic failure message for unknown user and wrong password: no account enumeration.
  * Token-only demo identities (password_hash IS NULL) can never log in with a password.
+ *
+ * The scrypt check always runs, even when no row matched or the row is token-only, so an unknown
+ * email cannot be told apart from a wrong password by response time alone (the constant-time twin of
+ * the shared error message above — see `DUMMY_PASSWORD_HASH`).
  */
 async function authenticateCredentials(db: Database, email: string, password: string): Promise<UserRow> {
   // Parameterized lookup; case-insensitive to match the unique index in migration 0003.
@@ -48,11 +52,9 @@ async function authenticateCredentials(db: Database, email: string, password: st
     [email],
   );
   const user = result.rows[0];
-  const presented =
-    user !== undefined && user.password_hash !== null
-      ? await verifyPassword(password, user.password_hash)
-      : false;
-  if (user === undefined || !presented) {
+  const storedHash = user?.password_hash ?? DUMMY_PASSWORD_HASH;
+  const presented = await verifyPassword(password, storedHash);
+  if (user === undefined || user.password_hash === null || !presented) {
     throw new AppError('unauthorized', 'Credentials are not valid');
   }
   return user;

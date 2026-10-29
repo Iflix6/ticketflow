@@ -2,7 +2,16 @@
 
 > **A production-oriented event ticketing and reliability engineering laboratory for exploring concurrency, transactional consistency, reservation expiration, idempotency, asynchronous processing, and observability under load.**
 
-**Project status:** Architecture and implementation blueprint. Features, benchmark results, and deployment links must be verified before being marked complete.
+**Project status:** Implemented through Phase 7 (hardening and publication). The flagship experiment is
+reproducible and has been measured — see
+[Reproduce the flagship experiment](#reproduce-the-flagship-experiment-1000-buyers-vs-100-tickets),
+[`docs/experiments/`](docs/experiments/), and [`docs/security/audit.md`](docs/security/audit.md). Run
+`npm run verify` to reproduce the full gate locally.
+
+> **Quick start.** `cp .env.example .env && npm install && npm run db:up && npm run migrate &&
+> npm run seed -- --experiment && npm run build && npm run boot:smoke`. On Windows, if a native
+> PostgreSQL owns `:5432`, keep `POSTGRES_PORT=5433` and use `:5433` in `DATABASE_URL` (the working
+> `.env` already does).
 
 ## Overview
 
@@ -12,7 +21,13 @@ TicketFlow Reliability Lab is a full-stack ticket booking system designed around
 
 The objective is not merely to display events and accept bookings. The objective is to demonstrate how a system can preserve inventory correctness, provide predictable user experiences, recover from failures, and remain observable when traffic spikes.
 
-The initial reference scenario is **1,000 concurrent booking attempts competing for 100 available tickets**. This is a *test scenario*, not a claim of achieved throughput or measured performance.
+The initial reference scenario is **1,000 concurrent booking attempts competing for 100 available
+tickets**. It is no longer only hypothetical: the harness in [Reproduce the flagship
+experiment](#reproduce-the-flagship-experiment-1000-buyers-vs-100-tickets) has run it over real HTTP and
+measured the outcome (exactly 100 confirmed, 900 `sold_out`, **zero oversells**, all six invariant views
+passing on a quiet host; under host load the same run fails safe with retryable 5xx and still never
+oversells). Latency/throughput numbers are host-dependent and reported as such, not as a headline
+benchmark claim.
 
 ### Engineering goals
 
@@ -521,6 +536,14 @@ Planned controls include:
 
 Rate limiting should be considered an admission-control layer, **not** the source of inventory correctness.
 
+**Status (Phase 7):** the controls above are implemented and were reviewed code-by-code in
+[`docs/security/audit.md`](docs/security/audit.md) — helmet/CORS/body-limit (`middleware/security.ts`),
+scrypt hashing + HMAC tokens (`modules/auth/credentials.ts`), hashed-at-rest DB sessions with atomic
+rotation (`modules/auth/sessions.ts`), per-user idempotency scoping and reservation ownership checks
+(`modules/reservations/service.ts`), the double-locked lab gate (`middleware/lab-gate.ts`), and fail-closed
+writes in the rate limiter. The audit found and fixed one real defect (a login timing side-channel that
+enabled username enumeration) and records the remaining production-hardening items.
+
 ---
 
 ## Observability
@@ -782,81 +805,165 @@ This tree describes the intended structure; directories and scripts should be cr
 - Git.
 - k6 for load testing.
 
-### Proposed startup workflow
+### Verified startup workflow
+
+Every command below was run against a **fresh database** for this project and produced the results in
+[Reproduce the flagship experiment](#reproduce-the-flagship-experiment-1000-buyers-vs-100-tickets) —
+there are no hidden manual steps.
 
 ```bash
-git clone https://github.com/<your-username>/ticketflow-reliability-lab.git
-cd ticketflow-reliability-lab
+git clone <your-remote>/ticketflow.git && cd ticketflow
 
-cp .env.example .env
-npm install
+cp .env.example .env            # local dev defaults; edit the DB port note below if needed
+npm install                     # npm workspaces (ADR-0008)
 
-docker compose up -d postgres redis
-npm run db:migrate
-npm run db:seed
-npm run dev
+npm run db:up                   # docker compose up -d postgres redis
+npm run migrate                 # applies migrations 1..9 to a fresh database
+npm run seed -- --experiment    # catalog + the 1,000-vs-100 flagship fixture (one 100-seat tier)
+
+npm run build                   # compiles apps/api/dist/server.js (used by boot:smoke and the bench)
+npm run boot:smoke              # boots the COMPILED artifact over HTTP, asserts graceful shutdown
 ```
 
-> **Implementation note:** The repository URL is a placeholder. The commands above are the intended developer interface and will work only after the corresponding Docker services, workspace scripts, migrations, and seeders have been implemented. Replace this note with verified setup instructions before declaring the project ready for external contributors.
+> **Windows / port 5432 caveat (real, not hypothetical).** A native PostgreSQL service frequently owns
+> `127.0.0.1:5432`. When it does, set `POSTGRES_PORT=5433` so Docker publishes the container on `:5433`
+> and point `DATABASE_URL` / `TF_TEST_DATABASE_URL` at `:5433`. This repository's working `.env` already
+> runs the compose database on host port `5433` for exactly that reason — **do not assume `:5432`.**
 
-### Proposed development endpoints
+To run the full local stack (API + worker + Postgres + Redis) instead of driving the compiled artifact
+by hand: `npm run compose:up`. Bring up the observability stack separately (it sits behind a compose
+profile): `docker compose --profile monitoring up -d`.
 
-| Service | Suggested local URL |
-| --- | --- |
-| Web | `http://localhost:3000` |
-| API | `http://localhost:4000` |
-| API health | `http://localhost:4000/health/ready` |
-| Grafana | `http://localhost:3001` |
-| Prometheus | `http://localhost:9090` |
+### Development endpoints
 
-These ports are suggested defaults, not verified running services.
+| Service | URL | Notes |
+| --- | --- | --- |
+| Web (Next.js) | `http://localhost:3000` | `npm run dev:web` |
+| API | `http://localhost:4000` | `npm run dev:api` (watch) or the compiled artifact |
+| API readiness | `http://127.0.0.1:4000/health/ready` | live DB + cache check; the benchmark refuses to run if this is not `200` |
+| Worker metrics | `http://127.0.0.1:9464/metrics` | separate `prom-client` registry (ADR-0001); Prometheus scrapes it as its own target |
+| Prometheus | `http://localhost:9090` | `--profile monitoring` only |
+| Grafana | `http://localhost:3001` | `--profile monitoring`; local admin bootstrap `admin` / `admin_local_only` |
 
-### Proposed npm scripts
+### npm scripts (as defined in the root `package.json`)
 
 ```bash
-npm run dev
-npm run build
-npm run lint
-npm run typecheck
-npm run test
-npm run test:integration
-npm run test:concurrency
-npm run db:migrate
-npm run db:seed
-npm run load:flash-sale
+npm run build            # build all workspaces
+npm run typecheck        # strict TS across workspaces
+npm run lint             # eslint .
+npm run test             # unit then integration
+npm run test:unit
+npm run test:integration # real PostgreSQL service
+npm run test:e2e         # Playwright against the running web+api
+npm run db:up            # compose up -d postgres redis
+npm run db:down
+npm run compose:up       # full stack, --build
+npm run migrate          # up
+npm run migrate:down     -- 9
+npm run seed             [-- --experiment | -- --reset]
+npm run boot:smoke       # boot compiled artifact, assert HTTP + graceful shutdown
+npm run invariants       # -- --quiescent SQL invariant views
+npm run bench            # HTTP benchmark harness (Phase 6/7)
+npm run verify           # the whole documented gate in one command
+npm run clean
 ```
 
-Implement and validate these scripts in the root `package.json` before relying on them.
+`npm run dev` does not exist as a single aggregate command — start `dev:api`, `dev:worker` and `dev:web`
+in separate terminals (or use `compose:up`).
+
+### Reproduce the flagship experiment (1,000 buyers vs 100 tickets)
+
+This is the Phase 7 gate, executed. It needs the app's own dependencies plus a running API; nothing else.
+
+```bash
+# 0. Precondition: stack up + migrated + seeded exactly as in the startup workflow above.
+#    `seed --experiment` created event slug `lab-flagship-1000-vs-100` with one `Single Seat` tier of
+#    capacity 100. Confirm the fresh database is already correct:
+npm run invariants -- --quiescent
+
+# 1. Start the API the experiment will drive. Raise the rate limiter so the run measures reservation
+#    contention, not the 429 limiter (see the harness's own note). On PowerShell use `$env:` form.
+RATE_LIMIT_MAX=100000 node apps/api/dist/server.js        # bash;  ->  http://127.0.0.1:4000
+
+# 2. Reproduce: 1,000 buyers, 100 concurrent, one ticket each, simulated success. The harness resolves
+#    the target by EVENT SLUG (stable and readable), measures start capacity from the live API, and
+#    exits non-zero ONLY on an actual oversell.
+npm run bench -- --event-slug lab-flagship-1000-vs-100 --users 1000 --concurrency 100 --quantity 1 --outcome success --label flagship
+
+# 3. Re-assert invariants over the post-burst data.
+npm run invariants -- --quiescent
+```
+
+**Measured result (clean host, run against a fresh `seed --experiment` database).** `100` buyers got a
+reservation and confirmed, the other `900` were correctly rejected `sold_out`, and **no seat was
+oversold**:
+
+```json
+{
+  "startAvailable": 100,
+  "reserveOps": 1000,
+  "confirmed": 100,
+  "outcomeTally": { "reserve:reserved": 100, "checkout:confirmed": 100, "reserve:sold_out": 900 },
+  "oversellViolation": false
+}
+```
+
+The database agrees (measured directly):
+
+```sql
+SELECT capacity, available, reserved, sold FROM inventory WHERE tier_id = (…Single Seat…);
+-- 100 | 0 | 0 | 100          SELECT count(*) FROM bookings;  --> 100
+-- npm run invariants -- --quiescent  ->  all 6 invariant views PASS
+```
+
+Raw artifact: [`docs/experiments/artifacts/repro7-flagship-1000-vs-100.json`](docs/experiments/artifacts/repro7-flagship-1000-vs-100.json).
+
+**Measured result (loaded host — the fail-safe, not a defect).** On a busy machine the same command
+competes for CPU and the PostgreSQL pool's 5-second acquisition timeout (`PG_CONNECTION_TIMEOUT_MS=5000`)
+returns HTTP 500 for some requests instead of waiting. That is the *correct* behaviour: it degrades to a
+retryable error rather than overselling. A measured loaded run confirmed only `56` of 100 seats, produced
+`95` reserve + `44` checkout `500`s, and **still** reported `oversellViolation: false` with all six
+invariant views passing. Artifact:
+[`repro7-flagship-slug-under-host-load.json`](docs/experiments/artifacts/repro7-flagship-slug-under-host-load.json).
+So the reproducible *guarantee* is "confirmed ≤ 100 and no invariant broken", which holds on every run;
+raw latency/throughput depends on how quiet the machine is.
 
 ---
 
 ## Environment configuration
 
-Example `.env.example` design:
+The authoritative list is [`.env.example`](.env.example) — copy it to `.env`. It is validated once at
+process start by `packages/config` (Zod); an unknown/invalid value is a hard startup failure, not a
+silent default. Key variables (all local-dev defaults, never production credentials):
 
 ```dotenv
-NODE_ENV=development
-API_PORT=4000
-WEB_PORT=3000
-
-DATABASE_URL=postgresql://ticketflow:change-me@localhost:5432/ticketflow
+NODE_ENV=local
+PORT=4000
+# A native Postgres on :5432 is common on Windows; publish compose on :5433 and match DATABASE_URL.
+POSTGRES_PORT=5433
+DATABASE_URL=postgresql://ticketflow:ticketflow_local_only@localhost:5433/ticketflow
+TF_TEST_DATABASE_URL=postgresql://ticketflow:ticketflow_local_only@localhost:5433/ticketflow
 REDIS_URL=redis://localhost:6379
 
+PG_POOL_MAX=20
+PG_CONNECTION_TIMEOUT_MS=5000      # the knob that produces the fail-safe 500 under saturation
+STATEMENT_TIMEOUT_MS=5000
+LOCK_TIMEOUT_MS=2000               # fast-fail (55P03) instead of piling up behind a row lock
+
+AUTH_SECRET=                       # >=32 chars; generate: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+SECURE_COOKIES=false
 RESERVATION_TTL_SECONDS=300
-MAX_TICKETS_PER_RESERVATION=4
+MAX_QUANTITY_PER_RESERVATION=10
+RATE_LIMIT_MAX=120                 # raise (e.g. 100000) when benchmarking reservation contention
 
-AUTH_ISSUER=http://localhost:4000
-AUTH_AUDIENCE=ticketflow-api
-AUTH_SECRET=replace-with-a-long-random-local-development-secret
-
-OTEL_SERVICE_NAME=ticketflow-api
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
-SENTRY_DSN=
-
-LOG_LEVEL=info
+LAB_ENABLED=false                  # the Engineering Lab is off unless explicitly enabled in local/test/ci
+METRICS_ENABLED=true
+GIT_SHA=                           # set in CI to attribute experiment runs to a commit
 ```
 
-**Security:** These values are examples. Never commit real credentials, production secrets, or private keys. Document any additional variables and validate them at process startup. Production authentication should use an appropriately hardened identity and token strategy.
+**Security:** These are example local values. `NODE_ENV=production` **refuses to start** if `AUTH_SECRET`
+/ `DATABASE_URL` still contain a committed local default, or if `LAB_ENABLED=true` (see
+`packages/config/src/index.ts`). Never commit real credentials; supply production secrets out of band.
 
 ---
 
@@ -879,29 +986,33 @@ A production-like deployment should include:
 
 ### CI/CD quality gates
 
-A proposed GitHub Actions pipeline should run:
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push to `main` and every pull
+request, against real PostgreSQL 18 and Redis service containers. The chain is exactly the local
+`npm run verify` gate plus the executed flagship experiment:
 
 ```text
-Lint and format
+install → build → typecheck (strict) → lint → unit tests
     ↓
-Type checking
+migrate on a fresh database → seed (--experiment) → integration tests (real PostgreSQL)
     ↓
-Unit tests
+invariant views (--quiescent)
     ↓
-PostgreSQL integration tests
+boot smoke (the COMPILED artifact over HTTP + graceful shutdown)
     ↓
-Concurrency and invariant tests
+migration rollback smoke (down 9, up again)
     ↓
-Build and dependency scanning
+flagship experiment: 1,000 buyers vs 100 tickets over HTTP — asserts NO oversell, then re-checks invariants
     ↓
-Deploy to staging
-    ↓
-Smoke tests and optional load tests
-    ↓
-Manual production approval
+dependency audit (report only until the advisory baseline is triaged)
 ```
 
-Load tests must run against controlled environments with explicit authorization, not against third-party production services.
+The flagship step exits the build **red only on an actual oversell**; transient 5xx from runner CPU
+contention are the documented fail-safe path and do not turn the gate red (the no-oversell assertion is
+what matters). `GIT_SHA` is exported to the job so every recorded experiment run is attributable to the
+commit under test.
+
+Load tests must run against controlled environments with explicit authorization, not against third-party
+production services.
 
 ---
 

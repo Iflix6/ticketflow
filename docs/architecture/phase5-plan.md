@@ -120,5 +120,5 @@ notice (no mock data); both are asserted in `booking.spec.ts` tests 5 and 6.
 ---
 
 Previous: [Phase 4 — Async processing, outbox relay, recovery](phase4-plan.md) ·
+Next: [Phase 6 — Observability and benchmarking](phase6-plan.md) ·
 Source of truth: [Ticketflow-Requirements-Prompt-Pack.md](../../Ticketflow-Requirements-Prompt-Pack.md)
-(Phase 6+ are not implemented yet, so no later phase doc exists).

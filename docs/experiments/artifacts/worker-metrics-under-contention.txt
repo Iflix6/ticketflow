@@ -1,0 +1,228 @@
+# HELP ticketflow_outbox_unpublished Outbox rows awaiting publication (relay backlog depth).
+# TYPE ticketflow_outbox_unpublished gauge
+ticketflow_outbox_unpublished 22
+
+# HELP ticketflow_outbox_oldest_age_seconds Age in seconds of the oldest unpublished outbox event, on the DB clock.
+# TYPE ticketflow_outbox_oldest_age_seconds gauge
+ticketflow_outbox_oldest_age_seconds 1
+
+# HELP ticketflow_worker_job_retries_total BullMQ job failures that will be retried (attempts beyond the first), by queue lane.
+# TYPE ticketflow_worker_job_retries_total counter
+
+# HELP ticketflow_worker_dead_letters_total Jobs that exhausted the retry budget and were parked on a dead queue, by lane.
+# TYPE ticketflow_worker_dead_letters_total counter
+
+# HELP ticketflow_pg_lock_wait_ms Observed lock waits sampled from pg_stat_activity.
+# TYPE ticketflow_pg_lock_wait_ms histogram
+ticketflow_pg_lock_wait_ms_bucket{le="0",locktype="tuple"} 0
+ticketflow_pg_lock_wait_ms_bucket{le="1",locktype="tuple"} 0
+ticketflow_pg_lock_wait_ms_bucket{le="5",locktype="tuple"} 0
+ticketflow_pg_lock_wait_ms_bucket{le="20",locktype="tuple"} 8
+ticketflow_pg_lock_wait_ms_bucket{le="50",locktype="tuple"} 22
+ticketflow_pg_lock_wait_ms_bucket{le="100",locktype="tuple"} 55
+ticketflow_pg_lock_wait_ms_bucket{le="250",locktype="tuple"} 118
+ticketflow_pg_lock_wait_ms_bucket{le="500",locktype="tuple"} 187
+ticketflow_pg_lock_wait_ms_bucket{le="1000",locktype="tuple"} 243
+ticketflow_pg_lock_wait_ms_bucket{le="2500",locktype="tuple"} 253
+ticketflow_pg_lock_wait_ms_bucket{le="5000",locktype="tuple"} 253
+ticketflow_pg_lock_wait_ms_bucket{le="+Inf",locktype="tuple"} 253
+ticketflow_pg_lock_wait_ms_sum{locktype="tuple"} 88763
+ticketflow_pg_lock_wait_ms_count{locktype="tuple"} 253
+ticketflow_pg_lock_wait_ms_bucket{le="0",locktype="transactionid"} 0
+ticketflow_pg_lock_wait_ms_bucket{le="1",locktype="transactionid"} 0
+ticketflow_pg_lock_wait_ms_bucket{le="5",locktype="transactionid"} 0
+ticketflow_pg_lock_wait_ms_bucket{le="20",locktype="transactionid"} 0
+ticketflow_pg_lock_wait_ms_bucket{le="50",locktype="transactionid"} 0
+ticketflow_pg_lock_wait_ms_bucket{le="100",locktype="transactionid"} 0
+ticketflow_pg_lock_wait_ms_bucket{le="250",locktype="transactionid"} 3
+ticketflow_pg_lock_wait_ms_bucket{le="500",locktype="transactionid"} 4
+ticketflow_pg_lock_wait_ms_bucket{le="1000",locktype="transactionid"} 12
+ticketflow_pg_lock_wait_ms_bucket{le="2500",locktype="transactionid"} 14
+ticketflow_pg_lock_wait_ms_bucket{le="5000",locktype="transactionid"} 14
+ticketflow_pg_lock_wait_ms_bucket{le="+Inf",locktype="transactionid"} 14
+ticketflow_pg_lock_wait_ms_sum{locktype="transactionid"} 9405
+ticketflow_pg_lock_wait_ms_count{locktype="transactionid"} 14
+
+# HELP ticketflow_worker_pg_pool_connections Worker pg.Pool utilisation sampled alongside the relay tick.
+# TYPE ticketflow_worker_pg_pool_connections gauge
+ticketflow_worker_pg_pool_connections{state="total"} 5
+ticketflow_worker_pg_pool_connections{state="idle"} 5
+ticketflow_worker_pg_pool_connections{state="waiting"} 0
+
+# HELP ticketflow_worker_ticks_total Relay/sweep sampling ticks and their outcome, so a stalled loop is visible as a rate of zero.
+# TYPE ticketflow_worker_ticks_total counter
+ticketflow_worker_ticks_total{loop="metrics",outcome="ok"} 56
+
+# HELP ticketflow_worker_process_cpu_user_seconds_total Total user CPU time spent in seconds.
+# TYPE ticketflow_worker_process_cpu_user_seconds_total counter
+ticketflow_worker_process_cpu_user_seconds_total 9.578000000000005
+
+# HELP ticketflow_worker_process_cpu_system_seconds_total Total system CPU time spent in seconds.
+# TYPE ticketflow_worker_process_cpu_system_seconds_total counter
+ticketflow_worker_process_cpu_system_seconds_total 4.547
+
+# HELP ticketflow_worker_process_cpu_seconds_total Total user and system CPU time spent in seconds.
+# TYPE ticketflow_worker_process_cpu_seconds_total counter
+ticketflow_worker_process_cpu_seconds_total 14.125
+
+# HELP ticketflow_worker_process_start_time_seconds Start time of the process since unix epoch in seconds.
+# TYPE ticketflow_worker_process_start_time_seconds gauge
+ticketflow_worker_process_start_time_seconds 1793244638
+
+# HELP ticketflow_worker_process_resident_memory_bytes Resident memory size in bytes.
+# TYPE ticketflow_worker_process_resident_memory_bytes gauge
+ticketflow_worker_process_resident_memory_bytes 116088832
+
+# HELP ticketflow_worker_nodejs_eventloop_lag_seconds Lag of event loop in seconds.
+# TYPE ticketflow_worker_nodejs_eventloop_lag_seconds gauge
+ticketflow_worker_nodejs_eventloop_lag_seconds 0.002289
+
+# HELP ticketflow_worker_nodejs_eventloop_lag_min_seconds The minimum recorded event loop delay.
+# TYPE ticketflow_worker_nodejs_eventloop_lag_min_seconds gauge
+ticketflow_worker_nodejs_eventloop_lag_min_seconds 0.008052736
+
+# HELP ticketflow_worker_nodejs_eventloop_lag_max_seconds The maximum recorded event loop delay.
+# TYPE ticketflow_worker_nodejs_eventloop_lag_max_seconds gauge
+ticketflow_worker_nodejs_eventloop_lag_max_seconds 0.064323583
+
+# HELP ticketflow_worker_nodejs_eventloop_lag_mean_seconds The mean of the recorded event loop delays.
+# TYPE ticketflow_worker_nodejs_eventloop_lag_mean_seconds gauge
+ticketflow_worker_nodejs_eventloop_lag_mean_seconds 0.015600293915282143
+
+# HELP ticketflow_worker_nodejs_eventloop_lag_stddev_seconds The standard deviation of the recorded event loop delays.
+# TYPE ticketflow_worker_nodejs_eventloop_lag_stddev_seconds gauge
+ticketflow_worker_nodejs_eventloop_lag_stddev_seconds 0.003618054298275177
+
+# HELP ticketflow_worker_nodejs_eventloop_lag_p50_seconds The 50th percentile of the recorded event loop delays.
+# TYPE ticketflow_worker_nodejs_eventloop_lag_p50_seconds gauge
+ticketflow_worker_nodejs_eventloop_lag_p50_seconds 0.015671295
+
+# HELP ticketflow_worker_nodejs_eventloop_lag_p90_seconds The 90th percentile of the recorded event loop delays.
+# TYPE ticketflow_worker_nodejs_eventloop_lag_p90_seconds gauge
+ticketflow_worker_nodejs_eventloop_lag_p90_seconds 0.019480575
+
+# HELP ticketflow_worker_nodejs_eventloop_lag_p99_seconds The 99th percentile of the recorded event loop delays.
+# TYPE ticketflow_worker_nodejs_eventloop_lag_p99_seconds gauge
+ticketflow_worker_nodejs_eventloop_lag_p99_seconds 0.025542655
+
+# HELP ticketflow_worker_nodejs_active_resources Number of active resources that are currently keeping the event loop alive, grouped by async resource type.
+# TYPE ticketflow_worker_nodejs_active_resources gauge
+ticketflow_worker_nodejs_active_resources{type="PipeWrap"} 2
+ticketflow_worker_nodejs_active_resources{type="TCPSocketWrap"} 14
+ticketflow_worker_nodejs_active_resources{type="TCPServerWrap"} 1
+ticketflow_worker_nodejs_active_resources{type="Timeout"} 9
+ticketflow_worker_nodejs_active_resources{type="Immediate"} 1
+
+# HELP ticketflow_worker_nodejs_active_resources_total Total number of active resources.
+# TYPE ticketflow_worker_nodejs_active_resources_total gauge
+ticketflow_worker_nodejs_active_resources_total 27
+
+# HELP ticketflow_worker_nodejs_active_handles Number of active libuv handles grouped by handle type. Every handle type is C++ class name.
+# TYPE ticketflow_worker_nodejs_active_handles gauge
+ticketflow_worker_nodejs_active_handles{type="Socket"} 16
+ticketflow_worker_nodejs_active_handles{type="Server"} 1
+
+# HELP ticketflow_worker_nodejs_active_handles_total Total number of active handles.
+# TYPE ticketflow_worker_nodejs_active_handles_total gauge
+ticketflow_worker_nodejs_active_handles_total 17
+
+# HELP ticketflow_worker_nodejs_active_requests Number of active libuv requests grouped by request type. Every request type is C++ class name.
+# TYPE ticketflow_worker_nodejs_active_requests gauge
+
+# HELP ticketflow_worker_nodejs_active_requests_total Total number of active requests.
+# TYPE ticketflow_worker_nodejs_active_requests_total gauge
+ticketflow_worker_nodejs_active_requests_total 0
+
+# HELP ticketflow_worker_nodejs_heap_size_total_bytes Process heap size from Node.js in bytes.
+# TYPE ticketflow_worker_nodejs_heap_size_total_bytes gauge
+ticketflow_worker_nodejs_heap_size_total_bytes 69488640
+
+# HELP ticketflow_worker_nodejs_heap_size_used_bytes Process heap size used from Node.js in bytes.
+# TYPE ticketflow_worker_nodejs_heap_size_used_bytes gauge
+ticketflow_worker_nodejs_heap_size_used_bytes 50702960
+
+# HELP ticketflow_worker_nodejs_external_memory_bytes Node.js external memory size in bytes.
+# TYPE ticketflow_worker_nodejs_external_memory_bytes gauge
+ticketflow_worker_nodejs_external_memory_bytes 8210633
+
+# HELP ticketflow_worker_nodejs_heap_space_size_total_bytes Process heap space size total from Node.js in bytes.
+# TYPE ticketflow_worker_nodejs_heap_space_size_total_bytes gauge
+ticketflow_worker_nodejs_heap_space_size_total_bytes{space="read_only"} 0
+ticketflow_worker_nodejs_heap_space_size_total_bytes{space="new"} 38535168
+ticketflow_worker_nodejs_heap_space_size_total_bytes{space="old"} 21233664
+ticketflow_worker_nodejs_heap_space_size_total_bytes{space="code"} 3145728
+ticketflow_worker_nodejs_heap_space_size_total_bytes{space="shared"} 0
+ticketflow_worker_nodejs_heap_space_size_total_bytes{space="trusted"} 4194304
+ticketflow_worker_nodejs_heap_space_size_total_bytes{space="shared_trusted"} 0
+ticketflow_worker_nodejs_heap_space_size_total_bytes{space="new_large_object"} 0
+ticketflow_worker_nodejs_heap_space_size_total_bytes{space="large_object"} 2224128
+ticketflow_worker_nodejs_heap_space_size_total_bytes{space="code_large_object"} 155648
+ticketflow_worker_nodejs_heap_space_size_total_bytes{space="shared_large_object"} 0
+ticketflow_worker_nodejs_heap_space_size_total_bytes{space="shared_trusted_large_object"} 0
+ticketflow_worker_nodejs_heap_space_size_total_bytes{space="trusted_large_object"} 0
+
+# HELP ticketflow_worker_nodejs_heap_space_size_used_bytes Process heap space size used from Node.js in bytes.
+# TYPE ticketflow_worker_nodejs_heap_space_size_used_bytes gauge
+ticketflow_worker_nodejs_heap_space_size_used_bytes{space="read_only"} 0
+ticketflow_worker_nodejs_heap_space_size_used_bytes{space="new"} 24750240
+ticketflow_worker_nodejs_heap_space_size_used_bytes{space="old"} 18544368
+ticketflow_worker_nodejs_heap_space_size_used_bytes{space="code"} 2556096
+ticketflow_worker_nodejs_heap_space_size_used_bytes{space="shared"} 0
+ticketflow_worker_nodejs_heap_space_size_used_bytes{space="trusted"} 2499800
+ticketflow_worker_nodejs_heap_space_size_used_bytes{space="shared_trusted"} 0
+ticketflow_worker_nodejs_heap_space_size_used_bytes{space="new_large_object"} 0
+ticketflow_worker_nodejs_heap_space_size_used_bytes{space="large_object"} 2203680
+ticketflow_worker_nodejs_heap_space_size_used_bytes{space="code_large_object"} 152512
+ticketflow_worker_nodejs_heap_space_size_used_bytes{space="shared_large_object"} 0
+ticketflow_worker_nodejs_heap_space_size_used_bytes{space="shared_trusted_large_object"} 0
+ticketflow_worker_nodejs_heap_space_size_used_bytes{space="trusted_large_object"} 0
+
+# HELP ticketflow_worker_nodejs_heap_space_size_available_bytes Process heap space size available from Node.js in bytes.
+# TYPE ticketflow_worker_nodejs_heap_space_size_available_bytes gauge
+ticketflow_worker_nodejs_heap_space_size_available_bytes{space="read_only"} 0
+ticketflow_worker_nodejs_heap_space_size_available_bytes{space="new"} 8802144
+ticketflow_worker_nodejs_heap_space_size_available_bytes{space="old"} 30888
+ticketflow_worker_nodejs_heap_space_size_available_bytes{space="code"} 589248
+ticketflow_worker_nodejs_heap_space_size_available_bytes{space="shared"} 0
+ticketflow_worker_nodejs_heap_space_size_available_bytes{space="trusted"} 1693760
+ticketflow_worker_nodejs_heap_space_size_available_bytes{space="shared_trusted"} 0
+ticketflow_worker_nodejs_heap_space_size_available_bytes{space="new_large_object"} 33554432
+ticketflow_worker_nodejs_heap_space_size_available_bytes{space="large_object"} 0
+ticketflow_worker_nodejs_heap_space_size_available_bytes{space="code_large_object"} 0
+ticketflow_worker_nodejs_heap_space_size_available_bytes{space="shared_large_object"} 0
+ticketflow_worker_nodejs_heap_space_size_available_bytes{space="shared_trusted_large_object"} 0
+ticketflow_worker_nodejs_heap_space_size_available_bytes{space="trusted_large_object"} 0
+
+# HELP ticketflow_worker_nodejs_version_info Node.js version info.
+# TYPE ticketflow_worker_nodejs_version_info gauge
+ticketflow_worker_nodejs_version_info{version="v26.1.0",major="26",minor="1",patch="0"} 1
+
+# HELP ticketflow_worker_nodejs_gc_duration_seconds Garbage collection duration by kind, one of major, minor, incremental or weakcb.
+# TYPE ticketflow_worker_nodejs_gc_duration_seconds histogram
+ticketflow_worker_nodejs_gc_duration_seconds_bucket{le="0.001",kind="minor"} 33
+ticketflow_worker_nodejs_gc_duration_seconds_bucket{le="0.01",kind="minor"} 99
+ticketflow_worker_nodejs_gc_duration_seconds_bucket{le="0.1",kind="minor"} 99
+ticketflow_worker_nodejs_gc_duration_seconds_bucket{le="1",kind="minor"} 99
+ticketflow_worker_nodejs_gc_duration_seconds_bucket{le="2",kind="minor"} 99
+ticketflow_worker_nodejs_gc_duration_seconds_bucket{le="5",kind="minor"} 99
+ticketflow_worker_nodejs_gc_duration_seconds_bucket{le="+Inf",kind="minor"} 99
+ticketflow_worker_nodejs_gc_duration_seconds_sum{kind="minor"} 0.19381389997899537
+ticketflow_worker_nodejs_gc_duration_seconds_count{kind="minor"} 99
+ticketflow_worker_nodejs_gc_duration_seconds_bucket{le="0.001",kind="major"} 0
+ticketflow_worker_nodejs_gc_duration_seconds_bucket{le="0.01",kind="major"} 8
+ticketflow_worker_nodejs_gc_duration_seconds_bucket{le="0.1",kind="major"} 9
+ticketflow_worker_nodejs_gc_duration_seconds_bucket{le="1",kind="major"} 9
+ticketflow_worker_nodejs_gc_duration_seconds_bucket{le="2",kind="major"} 9
+ticketflow_worker_nodejs_gc_duration_seconds_bucket{le="5",kind="major"} 9
+ticketflow_worker_nodejs_gc_duration_seconds_bucket{le="+Inf",kind="major"} 9
+ticketflow_worker_nodejs_gc_duration_seconds_sum{kind="major"} 0.06896090000122784
+ticketflow_worker_nodejs_gc_duration_seconds_count{kind="major"} 9
+ticketflow_worker_nodejs_gc_duration_seconds_bucket{le="0.001",kind="incremental"} 4
+ticketflow_worker_nodejs_gc_duration_seconds_bucket{le="0.01",kind="incremental"} 7
+ticketflow_worker_nodejs_gc_duration_seconds_bucket{le="0.1",kind="incremental"} 8
+ticketflow_worker_nodejs_gc_duration_seconds_bucket{le="1",kind="incremental"} 8
+ticketflow_worker_nodejs_gc_duration_seconds_bucket{le="2",kind="incremental"} 8
+ticketflow_worker_nodejs_gc_duration_seconds_bucket{le="5",kind="incremental"} 8
+ticketflow_worker_nodejs_gc_duration_seconds_bucket{le="+Inf",kind="incremental"} 8
+ticketflow_worker_nodejs_gc_duration_seconds_sum{kind="incremental"} 0.034903400018811225
+ticketflow_worker_nodejs_gc_duration_seconds_count{kind="incremental"} 8

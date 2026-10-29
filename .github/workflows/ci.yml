@@ -6,8 +6,9 @@ on:
   pull_request:
 
 # Fresh-clone reproduction: install → build → typecheck → lint → unit → migrate → seed →
-# integration (real PostgreSQL service container) → invariants. No step claims a result the
-# runner did not actually produce; `verify` is the same chain, locally.
+# integration (real PostgreSQL service container) → invariants → boot smoke → rollback smoke →
+# the flagship 1,000-vs-100 experiment asserting no oversell. No step claims a result the runner did
+# not actually produce; `verify` is the same chain, locally.
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -42,6 +43,11 @@ jobs:
       AUTH_SECRET: ${{ secrets.CI_AUTH_SECRET || 'ci_only_placeholder_secret_change_me_32chars' }}
       NODE_ENV: ci
       LOG_LEVEL: warn
+      # Attribute every recorded experiment run to the exact commit under test. The experiments
+      # service stores `config.GIT_SHA ?? null` on `experiment_runs.git_sha`; without this the column
+      # is null and runs are not revision-comparable (a limitation explicitly recorded in the Phase 6
+      # benchmark report — this line removes it for CI-driven runs).
+      GIT_SHA: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
 
@@ -92,6 +98,46 @@ jobs:
         run: |
           npm run migrate:down -- 9
           npm run migrate
+
+      # The Phase 7 gate, executed — not described. Boots the *compiled* artifact against the seeded
+      # service database and drives the real reservation API over HTTP with 1,000 buyers vs the 100-seat
+      # `lab-flagship-1000-vs-100` fixture. `npm run bench` exits non-zero ONLY on an actual oversell
+      # (confirmed > start capacity); transient 5xx under runner CPU contention are the documented
+      # fail-safe path (pool-acquisition timeout returns 500 rather than overselling) and must NOT turn
+      # the gate red — so the assertion is the safety invariant, not throughput or a clean error count.
+      - name: Flagship experiment (1,000 buyers vs 100 tickets) — no-oversell gate
+        env:
+          LAB_ENABLED: 'true'
+          RATE_LIMIT_MAX: '100000'
+          PORT: '4000'
+          HOST: '127.0.0.1'
+        run: |
+          node apps/api/dist/server.js > /tmp/flagship-api.log 2>&1 &
+          API_PID=$!
+          ready=0
+          for i in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:4000/health/ready > /dev/null 2>&1; then ready=1; break; fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then echo "[ci] API never became ready"; cat /tmp/flagship-api.log; kill $API_PID; exit 1; fi
+          set +e
+          npm run bench -- --event-slug lab-flagship-1000-vs-100 --users 1000 --concurrency 100 --quantity 1 --outcome success --label ci-flagship
+          bench_status=$?
+          set -e
+          kill $API_PID
+          if [ "$bench_status" -ne 0 ]; then echo "[ci] bench exit=$bench_status"; tail -40 /tmp/flagship-api.log; fi
+          exit $bench_status
+
+      - name: Invariant views after the flagship burst (must still hold)
+        run: npm run invariants -- --quiescent
+
+      - name: Upload flagship artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flagship-experiment
+          path: load-tests/results/ci-flagship-*
+          if-no-files-found: warn
 
       # Dependency audit remains informational until the advisory baseline is triaged; a hard gate
       # on an untriaged feed produces red CI with no actionability (documented in the runbook).
