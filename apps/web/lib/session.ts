@@ -8,8 +8,8 @@ import type { SessionUser } from './types';
  */
 export async function getSessionUser(): Promise<SessionUser | undefined> {
   try {
-    const res = await serverApi<{ user: SessionUser }>('/api/v1/auth/session');
-    return res.user;
+    const res = await serverApi<{ data: { user: SessionUser } }>('/api/v1/auth/session');
+    return res.data.user;
   } catch (error) {
     if (isApiCallError(error) && error.status === 401) return undefined;
     throw error;
