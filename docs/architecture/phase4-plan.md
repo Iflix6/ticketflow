@@ -90,5 +90,5 @@ npx vitest run --config vitest.integration.config.ts \
 ---
 
 Previous: [Phase 3 — Comparative strategies and the isolated unsafe lab](phase3-plan.md) ·
+Next: [Phase 5 — UI and lab](phase5-plan.md) ·
 Source of truth: [Ticketflow-Requirements-Prompt-Pack.md](../../Ticketflow-Requirements-Prompt-Pack.md)
-(Phases 5+ are not implemented yet, so no later phase doc exists).

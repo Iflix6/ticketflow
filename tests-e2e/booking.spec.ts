@@ -21,15 +21,16 @@ test('customer signs in through the UI and books two seats end-to-end', async ({
   await page.getByLabel('Email').fill('customer@local.test');
   await page.getByLabel('Password').fill('definitely-not-the-demo-password-12345');
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page.getByRole('alert')).toContainText('unauthorized');
+  // Next's route announcer is also role="alert" (empty), so target the form's own alert paragraph.
+  await expect(page.locator('form p[role="alert"]')).toContainText('unauthorized');
 
   // Right password lands on the catalog.
   await loginViaForm(page, 'customer@local.test', 'local-demo-customer-2026');
   await expect(page).toHaveURL(/\/events$/);
-  await expect(page.getByRole('heading', { level: 1 })).toContainText('Upcoming events');
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('Events');
 
   // Open the first event and hold two seats in the first tier.
-  await page.getByRole('link', { name: /details|book/i }).first().click();
+  await page.getByRole('link', { name: /Lab Fixture/i }).first().click();
   await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
   const qty = page.locator('input[type="number"]').first();
   await qty.fill('2');

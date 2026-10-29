@@ -54,8 +54,8 @@ export default async function RootLayout({ children }: { children: React.ReactNo
                     </Link>
                   ) : (
                     <span className="flex items-center gap-2">
-                      <span className="rounded bg-slate-100 px-2 py-1 text-xs">
-                        {user.email} <span className="text-slate-500">({user.role})</span>
+                      <span className="rounded bg-slate-100 px-2 py-1 text-xs text-slate-800">
+                        {user.email} <span className="text-slate-700">({user.role})</span>
                       </span>
                       <LogoutButton />
                     </span>
@@ -70,7 +70,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         </main>
         <footer className="mx-auto max-w-5xl px-4 py-8 text-xs text-slate-500">
           Local reliability lab — synthetic data, fake payments, seeded demo accounts. Environment:
-          <span className="ml-1 rounded bg-amber-100 px-1.5 py-0.5 font-mono">local</span>
+          <span className="ml-1 rounded bg-amber-100 px-1.5 py-0.5 font-mono text-amber-900">local</span>
         </footer>
       </body>
     </html>

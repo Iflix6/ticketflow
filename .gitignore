@@ -26,3 +26,10 @@ Thumbs.db
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# Playwright artifacts (Phase 5 e2e)
+test-results/
+playwright-report/
+
+# Ad-hoc scratch files (temp curl jars / measurement dumps) — never for the repo
+tmp-*

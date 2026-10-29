@@ -69,7 +69,7 @@ suite('phase 5 — db-backed browser sessions', () => {
       expect(res.body.data.expiresAt).toMatch(/^\d{4}-/);
       const cookie = sessionCookieOf(res);
       expect(cookie.length).toBeGreaterThan(20); // 32 random bytes base64url
-      const attrs = (res.headers['set-cookie'] as string[]).join(' ');
+      const attrs = ([res.headers['set-cookie'] as unknown].flat() as string[]).join(' ');
       expect(attrs).toContain('HttpOnly');
       expect(attrs).toContain('SameSite=Lax');
       expect(attrs).toContain('Path=/');
@@ -204,7 +204,7 @@ suite('phase 5 — db-backed browser sessions', () => {
       const out = await request(app).post('/api/v1/auth/session/logout').set('cookie', cookie);
       expect(out.status).toBe(200);
       expect(out.body.data.revoked).toBe(true);
-      const attrs = (out.headers['set-cookie'] as string[]).join(' ');
+      const attrs = ([out.headers['set-cookie'] as unknown].flat() as string[]).join(' ');
       expect(attrs).toContain('Max-Age=0');
 
       const after = await request(app).get('/api/v1/auth/session').set('cookie', cookie);

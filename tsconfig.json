@@ -12,6 +12,8 @@
     "apps/api/src/types/express.d.ts",
     "scripts/**/*.ts",
     "tests/**/*.ts",
+    "tests-e2e/**/*.ts",
+    "playwright.config.ts",
     "vitest.unit.config.ts",
     "vitest.integration.config.ts"
   ]

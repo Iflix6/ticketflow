@@ -98,7 +98,10 @@ export function BookingPanel({ tier, userName }: { tier: TierWithInventory; user
     setError(undefined);
     setNotice(undefined);
     try {
-      const res = await browserApiRaw<BookingDto | ReservationDto>(
+      // Every documented route replies with the `{data: ...}` envelope — the same way
+      // `holdSeats`/`refreshReservation` unwrap it; reading the raw body as the DTO would
+      // silently yield undefined fields.
+      const res = await browserApiRaw<{ data: BookingDto }>(
         `/api/v1/reservations/${reservation.id}/checkout`,
         {
           method: 'POST',
@@ -116,7 +119,7 @@ export function BookingPanel({ tier, userName }: { tier: TierWithInventory; user
         await refreshReservation(reservation.id);
         return;
       }
-      const booking = res.json as BookingDto;
+      const booking = res.json.data;
       setBooking(booking);
       if (booking.status === 'CONFIRMED') {
         setPhase('done');
@@ -225,11 +228,18 @@ export function BookingPanel({ tier, userName }: { tier: TierWithInventory; user
 
       {phase === 'done' && (
         <div className="mt-3 space-y-2">
-          <p role="status" className="text-sm font-medium text-green-800">
-            {booking !== undefined
-              ? `Booking ${booking.id.slice(0, 8)} — ${booking.status}, server total ${booking.currency} ${booking.totalAmount}.`
-              : `Hold is ${status}.`}
-          </p>
+          {/* Both conditions are state, not a narrowing dance: a server re-render of this panel can
+              legitimately see done-without-booking (refresh between phases), and must degrade, not crash. */}
+          {booking !== undefined && (
+            <p role="status" className="text-sm font-medium text-green-800">
+              Booking {booking.id.slice(0, 8)} — {booking.status}, server total {booking.currency} {booking.totalAmount}.
+            </p>
+          )}
+          {booking === undefined && (
+            <p role="status" className="text-sm font-medium text-green-800">
+              This hold is {status ?? 'confirmed on the server'}.
+            </p>
+          )}
           <p className="text-xs text-slate-500">Signed in as {userName}; visible under My bookings.</p>
         </div>
       )}

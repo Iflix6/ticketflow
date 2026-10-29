@@ -1,1 +1,0 @@
-{"strategy":"unsafe_lab","configuration":{"capacity":10,"concurrentUsers":40,"quantityPerUser":1,"rampMs":0,"artificialDelayMs":30,"reservationTtlSeconds":300,"seed":42,"dbPoolMax":10,"isolation":"read_committed"},"label":"web-smoke oversell"}
