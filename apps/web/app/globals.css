@@ -1,10 +1,90 @@
 @import 'tailwindcss';
 
+/*
+ * Theme architecture: class-based dark mode driven by runtime CSS variables, exposed to Tailwind as
+ * semantic color utilities via `@theme inline`. Surfaces reference tokens (bg-panel, text-ink,
+ * border-edge, bg-brand/10 …) that flip automatically when <html> carries the `dark` class, so
+ * components carry no `dark:` duplication for core surfaces. The `dark` class is applied by an inline
+ * script in the root layout before paint (no flash) and toggled by <ThemeToggle/> which persists the
+ * choice to localStorage. Accent/state tokens also switch, so a single `text-ok`/`bg-ok/10` reads
+ * correctly in both modes.
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --app: #f4f6fb;
+  --panel: #ffffff;
+  --elevated: #eef2f8;
+  --edge: #e2e8f0;
+  --ink: #0f1b2d;
+  --muted: #5b6b82;
+  --brand: #4f46e5;
+  --brand-ink: #ffffff;
+  --accent: #7c3aed;
+  --ok: #15803d;
+  --warn: #b45309;
+  --danger: #b91c1c;
+  --info: #1d4ed8;
+}
+
+.dark {
+  --app: #0a0f1c;
+  --panel: #101a2e;
+  --elevated: #0b1322;
+  --edge: #223148;
+  --ink: #e6edf6;
+  --muted: #93a4bc;
+  --brand: #6366f1;
+  --brand-ink: #ffffff;
+  --accent: #a78bfa;
+  --ok: #34d399;
+  --warn: #fbbf24;
+  --danger: #f87171;
+  --info: #60a5fa;
+}
+
+@theme inline {
+  --color-app: var(--app);
+  --color-panel: var(--panel);
+  --color-elevated: var(--elevated);
+  --color-edge: var(--edge);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-brand: var(--brand);
+  --color-brand-ink: var(--brand-ink);
+  --color-accent: var(--accent);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', 'Cascadia Code', Menlo, Consolas, monospace;
+
+  --radius-xl2: 1.25rem;
+}
+
 /* One focus style for the whole app: keyboard users must always see where they are. */
 :where(a, button, input, select, textarea):focus-visible {
-  outline: 2px solid #1d4ed8;
+  outline: 2px solid var(--brand);
   outline-offset: 2px;
-  border-radius: 4px;
+  border-radius: 6px;
+}
+
+html {
+  color-scheme: light dark;
+}
+
+body {
+  background-color: var(--app);
+  color: var(--ink);
+  font-family: var(--font-sans);
+}
+
+/* Hairline scrollbars inside data tables read as deliberate, not broken, in both themes. */
+.tf-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--edge) transparent;
 }
 
 @media (prefers-reduced-motion: reduce) {

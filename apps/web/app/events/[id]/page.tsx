@@ -2,6 +2,7 @@ import { serverApi } from '../../../lib/server-api';
 import { ErrorPanel } from '../../../components/ErrorPanel';
 import { BookingPanel } from '../../../components/BookingPanel';
 import { getSessionUser } from '../../../lib/session';
+import { PageHeader, Callout } from '../../../components/ui';
 import type { EventDto, TierWithInventory } from '../../../lib/types';
 import Link from 'next/link';
 
@@ -20,12 +21,16 @@ export default async function EventDetailPage({ params }: { params: Promise<{ id
     loadError = error;
   }
 
+  const back = (
+    <Link href="/events" className="inline-flex items-center gap-1 text-sm text-muted transition-colors hover:text-brand">
+      ← Back to events
+    </Link>
+  );
+
   if (loaded === undefined) {
     return (
       <div className="space-y-4">
-        <Link href="/events" className="text-sm underline">
-          ← Back to events
-        </Link>
+        {back}
         <ErrorPanel error={loadError} />
       </div>
     );
@@ -35,26 +40,27 @@ export default async function EventDetailPage({ params }: { params: Promise<{ id
   const user = await getSessionUser();
 
   return (
-    <div className="space-y-6">
-      <Link href="/events" className="text-sm underline">
-        ← Back to events
-      </Link>
-      <header>
-        <h1 className="text-2xl font-semibold">{view.event.title}</h1>
-        <p className="mt-1 text-slate-600">{view.event.description}</p>
-        <p className="text-sm text-slate-500">
-          Starts {new Date(view.event.startAt).toLocaleString()} · status {view.event.status}
-        </p>
-      </header>
+    <div className="space-y-8">
+      {back}
+      <PageHeader
+        title={view.event.title}
+        subtitle={
+          <>
+            {view.event.description}
+            <span className="mt-1 block text-xs text-muted">
+              Starts {new Date(view.event.startAt).toLocaleString()} · status {view.event.status}
+            </span>
+          </>
+        }
+      />
 
       {user === undefined ? (
-        <p className="rounded border border-slate-200 bg-white p-4 text-sm">
-          <Link href="/login" className="underline font-medium">
+        <Callout tone="info">
+          <Link href="/login" className="font-medium underline underline-offset-2">
             Sign in
           </Link>{' '}
-          to reserve seats. Prices and availability below are read from the server — this page
-          invents nothing.
-        </p>
+          to reserve seats. Prices and availability below are read from the server — this page invents nothing.
+        </Callout>
       ) : (
         <section aria-label="Tiers" className="space-y-4">
           {view.tiers.map((tier) => (

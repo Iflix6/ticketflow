@@ -22,14 +22,23 @@ export function ErrorPanel({ error }: { error: unknown }) {
   }
 
   return (
-    <div role="alert" className="rounded border border-red-300 bg-red-50 p-4 text-sm">
-      <p className="font-semibold text-red-800">{title}</p>
-      <p className="mt-1 text-red-700">{detail}</p>
-      {hint !== undefined && <p className="mt-1 text-red-600">{hint}</p>}
+    <div
+      role="alert"
+      className="rounded-xl border border-danger/30 bg-danger/10 p-4 text-sm text-danger"
+    >
+      <p className="font-semibold">{title}</p>
+      <p className="mt-1 opacity-90">{detail}</p>
+      {hint !== undefined && (
+        <p className="mt-1 font-mono text-xs opacity-80">{hint}</p>
+      )}
     </div>
   );
 }
 
 export function EmptyState({ children }: { children: React.ReactNode }) {
-  return <p className="rounded border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">{children}</p>;
+  return (
+    <div className="rounded-xl border border-dashed border-edge bg-elevated/50 px-6 py-12 text-center text-sm text-muted">
+      {children}
+    </div>
+  );
 }
