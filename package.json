@@ -33,6 +33,7 @@
     "test:watch": "vitest --config vitest.unit.config.ts",
     "test:e2e": "playwright test",
     "invariants": "tsx scripts/check-invariants.ts",
+    "bench": "tsx scripts/benchmark.ts",
     "verify": "tsx scripts/verify.ts",
     "clean": "tsx scripts/clean.ts"
   },

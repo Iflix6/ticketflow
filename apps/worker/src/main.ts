@@ -2,10 +2,12 @@ import { writeFileSync } from 'node:fs';
 import pg from 'pg';
 import { bootstrapConfig, ConfigError, type AppConfig } from '@ticketflow/config';
 import pino from 'pino';
-import { relayOnce } from './outbox.js';
+import { relayOnce, backlogOf } from './outbox.js';
 import { sweepExpiries } from './expiry.js';
 import { reconcile, resolveStaleFindings } from './reconciliation.js';
 import { BullMQDispatcher, createQueues, redisOptionsFromUrl, startWorkers } from './queues.js';
+import { sampleLockWaits, workerMetrics } from './metrics.js';
+import { startMetricsServer } from './metrics-server.js';
 
 /**
  * Worker process entry point (Phase 4 — real consumers, replacing the Phase-1 skeleton).
@@ -25,6 +27,10 @@ const HEARTBEAT_PATH = process.env.TF_WORKER_HEARTBEAT ?? '/tmp/worker-heartbeat
 const HEARTBEAT_INTERVAL_MS = 10_000;
 // An event older than this without publication means the relay is not keeping up (Redis down/backlog).
 const OUTBOX_STUCK_THRESHOLD_SECONDS = 60;
+// Scrape endpoint port. Loopback by default and never published; override for the compose network.
+const METRICS_PORT = Number(process.env.WORKER_METRICS_PORT ?? 9464);
+const METRICS_HOST = process.env.WORKER_METRICS_HOST ?? '127.0.0.1';
+const METRICS_SAMPLE_MS = Number(process.env.WORKER_METRICS_SAMPLE_MS ?? 5_000);
 
 function createLogger(config: AppConfig): pino.Logger {
   return pino({
@@ -89,6 +95,33 @@ async function main(): Promise<void> {
   beat();
   const heartbeatTimer = setInterval(beat, HEARTBEAT_INTERVAL_MS);
 
+  // Prometheus scrape endpoint for the metrics only this process can observe (outbox, queue, locks).
+  const metricsServer = METRICS_PORT > 0 ? startMetricsServer(METRICS_PORT, METRICS_HOST) : undefined;
+  if (metricsServer !== undefined) {
+    log.info({ port: METRICS_PORT, host: METRICS_HOST }, 'worker metrics endpoint listening');
+  }
+
+  // A single sampling loop publishes backlog/age/pool/lock waits and records that the loop is alive.
+  // It reads the SAME outbox backlog query the readiness probe and reconciliation use, so the numbers on
+  // the dashboard and the alert rules are computed identically — never a second, drifting definition.
+  const metricsTimer = setInterval(() => {
+    if (draining) return;
+    void (async () => {
+      const backlog = await backlogOf(pool);
+      workerMetrics.outboxUnpublished.set(backlog.unpublished);
+      workerMetrics.outboxOldestAgeSeconds.set(backlog.oldestAgeSeconds ?? 0);
+      const stats = { total: pool.totalCount, idle: pool.idleCount, waiting: pool.waitingCount };
+      workerMetrics.poolConnections.set({ state: 'total' }, stats.total);
+      workerMetrics.poolConnections.set({ state: 'idle' }, stats.idle);
+      workerMetrics.poolConnections.set({ state: 'waiting' }, stats.waiting);
+      await sampleLockWaits(pool);
+      workerMetrics.ticks.inc({ loop: 'metrics', outcome: 'ok' });
+    })().catch((error: unknown) => {
+      workerMetrics.ticks.inc({ loop: 'metrics', outcome: 'error' });
+      log.error({ err: error }, 'metrics sampling tick failed');
+    });
+  }, METRICS_SAMPLE_MS);
+
   const relayTimer = setInterval(() => {
     if (draining) return;
     void relayOnce(pool, dispatcher, { batchSize: config.OUTBOX_BATCH_SIZE })
@@ -121,6 +154,8 @@ async function main(): Promise<void> {
     clearInterval(heartbeatTimer);
     clearInterval(relayTimer);
     clearInterval(sweeperTimer);
+    clearInterval(metricsTimer);
+    metricsServer?.close();
     // Close consumers BEFORE queues/pool so no job is claimed after we stop accepting new work; BullMQ
     // `close()` waits for active jobs to finish, so a half-processed job never leaves a stale claim.
     void Promise.all([workers.close(), queues.close()])

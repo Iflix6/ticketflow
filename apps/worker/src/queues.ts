@@ -3,6 +3,7 @@ import type { ConnectionOptions, Job } from 'bullmq';
 import type { Pool } from './db.js';
 import { expireOneReservation, processOutboxJob } from './consumers.js';
 import type { Dispatcher, OutboxJobData } from './outbox.js';
+import { workerMetrics } from './metrics.js';
 
 /**
  * BullMQ topology (ADR-0005). Every business event flows through the `outbox-dispatch` queue; expiry
@@ -194,9 +195,13 @@ async function moveToDead(
 ): Promise<void> {
   if (job === undefined) return;
   if (job.attemptsMade < maxAttempts) {
+    // Beyond the first attempt and still retryable: this is queue lag burning CPU, the exact signal
+    // "job retries" is meant to surface. Count it before logging so the metric and the log never diverge.
+    workerMetrics.jobRetries.inc({ queue: lane });
     log('job failed, will retry', { lane, jobId: job.id, attempt: job.attemptsMade, error: error.message });
     return;
   }
+  workerMetrics.deadLetters.inc({ queue: lane });
   log('job exhausted retries -> dead-letter', { lane, jobId: job.id, error: error.message });
   await deadQueue.add(job.name, job.data).catch((addError: unknown) =>
     log('dead-letter add failed', { lane, jobId: job.id, error: String(addError) }));

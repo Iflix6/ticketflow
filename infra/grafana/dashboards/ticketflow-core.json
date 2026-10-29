@@ -75,6 +75,50 @@
       "targets": [
         { "expr": "sum(ticketflow_inventory_invariant_violations)", "legendFormat": "violations" }
       ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Outbox backlog depth + oldest age (worker)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "TicketFlow-Prometheus" },
+      "targets": [
+        { "expr": "ticketflow_outbox_unpublished", "legendFormat": "unpublished" },
+        { "expr": "ticketflow_outbox_oldest_age_seconds", "legendFormat": "oldest age (s)" }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Worker job retries + dead-letters by lane",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "TicketFlow-Prometheus" },
+      "targets": [
+        { "expr": "sum by (queue) (rate(ticketflow_worker_job_retries_total[5m]))", "legendFormat": "retry {{queue}}" },
+        { "expr": "sum by (queue) (rate(ticketflow_worker_dead_letters_total[5m]))", "legendFormat": "dead {{queue}}" }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "PG lock-wait tail p50 / p95 / p99 (worker sample)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "TicketFlow-Prometheus" },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum by (le) (rate(ticketflow_pg_lock_wait_ms_bucket[5m])))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(ticketflow_pg_lock_wait_ms_bucket[5m])))", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, sum by (le) (rate(ticketflow_pg_lock_wait_ms_bucket[5m])))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Worker liveness (metrics ticks/s — zero means wedged)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "TicketFlow-Prometheus" },
+      "targets": [
+        { "expr": "sum by (outcome) (rate(ticketflow_worker_ticks_total[2m]))", "legendFormat": "{{outcome}}" }
+      ]
     }
   ]
 }

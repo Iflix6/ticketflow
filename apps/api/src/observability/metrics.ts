@@ -78,37 +78,10 @@ export class AppMetrics {
     registers: [this.registry],
   });
 
-  readonly outboxUnpublished = new Gauge({
-    name: 'ticketflow_outbox_unpublished',
-    help: 'Outbox rows awaiting publication (backlog depth).',
-    registers: [this.registry],
-  });
-
-  readonly outboxOldestAgeSeconds = new Gauge({
-    name: 'ticketflow_outbox_oldest_age_seconds',
-    help: 'Age of the oldest unpublished outbox event.',
-    registers: [this.registry],
-  });
-
-  readonly jobRetries = new Counter({
-    name: 'ticketflow_worker_job_retries_total',
-    help: 'BullMQ job attempts beyond the first.',
-    labelNames: ['queue'] as const,
-    registers: [this.registry],
-  });
-
   readonly invariantViolations = new Gauge({
     name: 'ticketflow_inventory_invariant_violations',
     help: 'Rows returned by each invariant view; must be 0 for safe strategies.',
     labelNames: ['invariant'] as const,
-    registers: [this.registry],
-  });
-
-  readonly lockWaitsMs = new Histogram({
-    name: 'ticketflow_pg_lock_wait_ms',
-    help: 'Observed lock waits sampled from pg_stat_activity.',
-    labelNames: ['locktype'] as const,
-    buckets: [0, 1, 5, 20, 50, 100, 250, 500, 1000, 2500, 5000],
     registers: [this.registry],
   });
 
@@ -141,5 +114,6 @@ export class AppMetrics {
   }
 }
 
-/** Process-wide metrics instance; imported by middleware, services, repositories and the worker. */
+/** Process-wide metrics instance for the API; imported by middleware, services and repositories. The
+ *  worker is a separate process and exports its own registry (see apps/worker/src/metrics.ts). */
 export const appMetrics = new AppMetrics();

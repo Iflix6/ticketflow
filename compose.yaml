@@ -112,7 +112,12 @@ services:
       AUTH_SECRET: ${AUTH_SECRET:-local_only_secret_replace_me_please_32chars}
       LAB_ENABLED: ${LAB_ENABLED:-false}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Bind inside the compose network so Prometheus (same network) can scrape it.
+      WORKER_METRICS_HOST: 0.0.0.0
+      WORKER_METRICS_PORT: '9464'
     networks: [ticketflow]
+    ports:
+      - '127.0.0.1:9464:9464'
     healthcheck:
       # The worker writes a heartbeat file; the check fails when it stops progressing.
       test: ['CMD-SHELL', 'test $(( $(date +%s) - $(stat -c %Y /tmp/worker-heartbeat 2>/dev/null || echo 0) )) -lt 60']
@@ -131,6 +136,7 @@ services:
     container_name: ticketflow-prometheus
     volumes:
       - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/prometheus/alert-rules.yml:/etc/prometheus/alert-rules.yml:ro
       - prometheus-data:/prometheus
     command:
       - --config.file=/etc/prometheus/prometheus.yml

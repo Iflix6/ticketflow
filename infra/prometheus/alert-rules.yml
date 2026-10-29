@@ -1,0 +1,80 @@
+# Prometheus alerting rules — as-code, LOCAL LAB examples (pack: "alert examples").
+#
+# Every rule keys off a metric the API or worker actually emits (verified against /metrics output in
+# docs/architecture/phase6-plan.md). There is deliberately no alert on a metric we do not collect — a
+# rule that can never evaluate is worse than no rule, because it trains the on-call to ignore the file.
+# Thresholds are chosen for the local fixture; production would re-tune them (see the hardening backlog).
+groups:
+  - name: ticketflow-delivery
+    rules:
+      # The outbox relay is not draining: an event older than the worker's own stuck threshold (60s)
+      # is still unpublished. Booking still works (DB is the truth), but downstream delivery is lagging
+      # — usually Redis is down or the relay loop stalled. Maps to docs/runbooks/outbox-and-redis.md.
+      - alert: OutboxEventStuck
+        expr: ticketflow_outbox_oldest_age_seconds > 60
+        for: 2m
+        labels: { severity: warning }
+        annotations:
+          summary: "Oldest unpublished outbox event is >{{ $value }}s old"
+          description: "The outbox relay has not published the oldest pending event for 2 minutes. Check worker liveness and Redis connectivity."
+
+      - alert: OutboxBacklogGrowing
+        expr: delta(ticketflow_outbox_unpublished[5m]) > 100
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Outbox backlog grew by more than 100 in 5 minutes"
+          description: "Production is outrunning dispatch. Sustained growth precedes the stuck alert above."
+
+      # A sampling loop that stopped ticking is invisible unless you assert on its rate. This is the
+      # "is the worker even alive" signal that a heartbeat file alone does not give the dashboard.
+      - alert: WorkerMetricsStalled
+        expr: rate(ticketflow_worker_ticks_total{loop="metrics",outcome="ok"}[2m]) == 0
+        for: 3m
+        labels: { severity: critical }
+        annotations:
+          summary: "Worker metrics sampling loop has not completed a tick"
+          description: "No successful metrics tick in 3 minutes — the worker is crashed, drained, or wedged."
+
+  - name: ticketflow-consistency
+    rules:
+      # The load-bearing gate of the whole system: safe-path inventory must never violate an invariant.
+      # Any non-zero value here is a P1, because it means an oversell or a counter drift slipped through.
+      - alert: InventoryInvariantViolation
+        expr: sum by (invariant) (ticketflow_inventory_invariant_violations) > 0
+        for: 0m
+        labels: { severity: critical }
+        annotations:
+          summary: "Invariant {{ $labels.invariant }} is violated"
+          description: "A public-inventory SQL invariant reported a violation row. Stop and investigate before any further writes."
+
+      # Optimistic retries that exhausted their budget mean real requests got a CONFLICT the client may
+      # misread as SOLD_OUT (see strategy-comparison.md). Not a correctness break, but a UX/capacity one.
+      - alert: TransactionRetriesExhausted
+        expr: rate(ticketflow_tx_retries_exhausted_total[5m]) > 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Bounded transaction retries are being exhausted"
+          description: "Operations are failing after consuming the retry budget — contention or a hot row."
+
+  - name: ticketflow-saturation
+    rules:
+      # API pool waiting means requests are queueing for a connection: the classic tail-latency cause.
+      - alert: DbPoolQueueing
+        expr: ticketflow_pg_pool_connections{state="waiting",component="api"} > 5
+        for: 3m
+        labels: { severity: warning }
+        annotations:
+          summary: "API PostgreSQL pool has {{ $value }} callers waiting for a connection"
+          description: "Pool saturation — raise PG_POOL_MAX or reduce per-request work; p99 will be dominated by connection acquisition."
+
+      # A lock-wait p95 climbing is the lock-convoy signature pessimistic strategies show (see the Phase 3
+      # report). Warning, not critical: brief waits are normal under contention; a sustained tail is not.
+      - alert: LockWaitTailHigh
+        expr: histogram_quantile(0.95, sum by (le) (rate(ticketflow_pg_lock_wait_ms_bucket[5m]))) > 250
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "p95 PostgreSQL lock wait is above 250ms"
+          description: "Sustained lock contention. Correlate with transaction retries and pool queueing before changing isolation."

@@ -6,6 +6,11 @@ global:
     lab: ticketflow
     environment: local
 
+# Alert rules are as-code too (pack: "alert examples"). They fire only against the live metrics the
+# API/worker actually emit — no rule references a metric that does not exist.
+rule_files:
+  - /etc/prometheus/alert-rules.yml
+
 scrape_configs:
   - job_name: ticketflow-api
     metrics_path: /metrics
@@ -13,6 +18,14 @@ scrape_configs:
       - targets: ['api:4000']
         labels:
           component: api
+
+  # The worker is a separate process (ADR-0001) exporting the queue/outbox/lock metrics only it can see.
+  - job_name: ticketflow-worker
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['worker:9464']
+        labels:
+          component: worker
 
   - job_name: prometheus
     static_configs:
