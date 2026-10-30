@@ -2,6 +2,7 @@ import { serverApi } from '../../../lib/server-api';
 import { ErrorPanel } from '../../../components/ErrorPanel';
 import { FixtureResetButton } from '../../../components/FixtureResetButton';
 import { PageHeader, SectionLabel, Badge } from '../../../components/ui';
+import { Stagger } from '../../../components/anim';
 import type { StrategyDescriptorDto } from '../../../lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -28,9 +29,9 @@ export default async function StrategiesPage() {
         subtitle="Four allocation strategies share one fixture. The first three are safe under concurrency by different mechanisms; the fourth is the deliberate bug — it exists so the dashboard can show a REAL oversell with recorded invariant violations, never a staged one."
       />
 
-      <div className="space-y-4">
+      <Stagger as="div" className="space-y-4" step={0.08}>
         {strategies.map((s) => (
-          <article key={s.id} className="rounded-xl2 border border-edge bg-panel p-5 shadow-sm">
+          <article key={s.id} className="rounded-xl2 border border-edge bg-panel p-5 shadow-1">
             <header className="flex flex-wrap items-center gap-2.5">
               <h2 className="text-lg font-semibold">{s.label}</h2>
               <code className="rounded bg-elevated px-2 py-0.5 font-mono text-xs text-muted">{s.id}</code>
@@ -58,9 +59,9 @@ export default async function StrategiesPage() {
             </div>
           </article>
         ))}
-      </div>
+      </Stagger>
 
-      <section aria-labelledby="fixture-heading" className="rounded-xl2 border border-edge bg-panel p-5 shadow-sm">
+      <section aria-labelledby="fixture-heading" className="rounded-xl2 border border-edge bg-panel p-5 shadow-1">
         <h2 id="fixture-heading" className="text-lg font-semibold">Lab fixture</h2>
         <p className="mt-1 text-sm text-muted">
           Runs reset the fixture themselves as their first step (seeded, deterministic). The button

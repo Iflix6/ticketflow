@@ -1,6 +1,6 @@
 'use client';
 
-import { useLayoutEffect, useRef, type ElementType, type ReactNode } from 'react';
+import { createElement, useLayoutEffect, useRef, type ElementType, type ReactNode } from 'react';
 import gsap from 'gsap';
 
 /**
@@ -48,7 +48,7 @@ export function Reveal({
 export function Stagger({
   children,
   className,
-  as: Tag = 'div' as ElementType,
+  as = 'div',
   delay = 0,
   step = 0.06,
   y = 16,
@@ -60,7 +60,7 @@ export function Stagger({
   step?: number;
   y?: number;
 }) {
-  const ref = useRef<HTMLElement>(null);
+  const ref = useRef<HTMLElement | null>(null);
   useLayoutEffect(() => {
     if (prefersReduced() || ref.current === null) return;
     const el = ref.current;
@@ -69,12 +69,8 @@ export function Stagger({
     }, ref);
     return () => ctx.revert();
   }, [delay, step, y]);
-  // @ts-expect-error — a polymorphic ElementType ref is structurally fine; TS cannot narrow it here.
-  return (
-    <Tag ref={ref} className={className}>
-      {children}
-    </Tag>
-  );
+  // createElement keeps the polymorphic tag (ul/dl/tbody…) semantic while accepting the ref cleanly.
+  return createElement(as, { ref, className }, children);
 }
 
 /**

@@ -618,11 +618,23 @@ paths:
     post:
       operationId: createLabRun
       tags: [lab]
-      summary: Run one isolated experiment to completion
+      summary: Run one isolated experiment (synchronously, or asynchronously with `?mode=live`)
       description: |
-        Executes SYNCHRONOUSLY against the isolated `lab` schema and returns the COMPLETED run with its
-        measured summary; public inventory is never touched (ADR-0009). Phase 5 decides whether this
-        becomes an async job with a progress stream.
+        Runs against the isolated `lab` schema; public inventory is never touched (ADR-0009).
+
+        Default (`mode=sync`) executes SYNCHRONOUSLY: the request blocks until the run reaches a terminal
+        status and answers 201 with the immutable summary — the long-standing contract the dashboard, the
+        e2e suite and OpenAPI parity rely on.
+
+        `mode=live` answers 202 `Accepted` immediately with the freshly-`PENDING` run and executes the
+        fan-out in the background; follow `GET /api/v1/lab/runs/{id}/progress` for the live tally. Async
+        runs are serialized process-wide so they never clobber the single `lab` fixture.
+      parameters:
+        - name: mode
+          in: query
+          required: false
+          description: `sync` (default) blocks and returns the completed run; `live` returns 202 and streams.
+          schema: { type: string, enum: [sync, live], default: sync }
       requestBody:
         required: true
         content:
@@ -631,6 +643,14 @@ paths:
       responses:
         '201':
           description: Completed run (or 201 with status FAILED if the run errored internally).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties: { data: { $ref: '#/components/schemas/LabRun' } }
+        '202':
+          description: Accepted (`mode=live`) — the run is queued; read its progress over SSE.
           content:
             application/json:
               schema:
@@ -686,6 +706,34 @@ paths:
                 required: [data]
                 properties:
                   data: { type: array, items: { $ref: '#/components/schemas/ExperimentResult' } }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/lab/runs/{id}/progress:
+    get:
+      operationId: streamLabRunProgress
+      tags: [lab]
+      summary: Live progress for an experiment run (Server-Sent Events)
+      description: |
+        `text/event-stream`. Each `data:` frame is a JSON `LabRunProgressEvent` (`phase` | `tick` | `summary`);
+        the stream ends with a `data: [DONE]` sentinel. A run that is already terminal answers a single
+        terminal frame then closes. Intended to be opened after a `?mode=live` run creation; a live
+        connection is capped at five minutes and may reconnect (`EventSource` does this automatically), while
+        the background run keeps going. Progress frames are presentation-only — the authoritative, immutable
+        record stays the `experiment_runs` summary the terminal frame mirrors.
+      parameters:
+        - $ref: '#/components/parameters/UuidId'
+      responses:
+        '200':
+          description: Event stream of run-progress frames.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: Newline-delimited SSE frames; each `data:` payload is a `LabRunProgressEvent` JSON object.
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }

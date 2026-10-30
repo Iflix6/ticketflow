@@ -1,25 +1,28 @@
-import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { bootstrapConfig, ConfigError } from '@ticketflow/config';
-import { createApp } from './app.js';
-import { bindPoolMetrics, createDatabase } from './db/pool.js';
 import { createLogger } from './observability/logger.js';
-import { makeRedisProbe } from './redis-probe.js';
+import { shutdownTracing, startTracing } from './observability/tracing.js';
 
 /**
  * API process entry point.
  *
- * Startup order is a fail-fast chain: validated environment → logger → pool → app → listen.
+ * Startup order is a fail-fast chain: validated environment → logger → tracing → pool → app → listen.
  * A misconfigured variable must kill the process before it can serve a single request, because
  * half-configured booking behaviour is worse than no booking behaviour.
  *
- * Shutdown: stop accepting connections, drain in-flight requests, then close the pool. The
+ * Tracing is a load-order constraint, not just a toggle: OpenTelemetry's auto-instrumentation patches
+ * `http`, `express`, and `pg` only if those modules are FIRST LOADED after the provider registers. This
+ * project ships plain ESM with no `--import` loader flag, so the app graph below is deliberately pulled
+ * in with dynamic `import()` AFTER {@link startTracing}. When tracing is disabled the dynamic import is
+ * behaviourally identical (just lazy), so the disabled path is unchanged.
+ *
+ * Shutdown: stop accepting connections, drain in-flight requests, close the pool, then flush spans. The
  * forced-exit timer exists because a hung keep-alive socket must not turn a deploy into a stall.
  */
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
-function main(): void {
+async function main(): Promise<void> {
   let config;
   try {
     config = bootstrapConfig();
@@ -30,6 +33,17 @@ function main(): void {
   }
 
   const logger = createLogger(config);
+  await startTracing(config, logger, 'ticketflow-api');
+
+  // Load the instrumented modules only now, after the tracer provider is registered.
+  const [httpMod, { createApp }, { bindPoolMetrics, createDatabase }, { makeRedisProbe }] = await Promise.all([
+    import('node:http'),
+    import('./app.js'),
+    import('./db/pool.js'),
+    import('./redis-probe.js'),
+  ]);
+  const http = httpMod.default;
+
   const db = createDatabase(config);
   const poolMetricsTimer = bindPoolMetrics(db);
 
@@ -61,6 +75,7 @@ function main(): void {
       clearInterval(poolMetricsTimer);
       void db
         .close()
+        .then(() => shutdownTracing())
         .then(() => logger.info('shutdown complete'))
         .catch((closeError: unknown) => {
           logger.error({ err: closeError }, 'error closing pool');
@@ -96,4 +111,8 @@ function main(): void {
   });
 }
 
-main();
+main().catch((error: unknown) => {
+  // A failure before/around the fail-fast chain must surface and exit non-zero, never hang half-up.
+  console.error('[api] fatal startup error', error);
+  process.exitCode = 1;
+});

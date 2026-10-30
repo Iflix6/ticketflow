@@ -35,6 +35,12 @@ jobs:
           --health-cmd "redis-cli ping"
           --health-interval 5s
           --health-retries 10
+      # OTLP collector for the tracing-enabled boot-smoke step. Its default config exposes an OTLP/HTTP
+      # receiver on 4318; the app is defensive, so a slow/absent collector can never fail the build.
+      otel:
+        image: otel/opentelemetry-collector-contrib:0.115.0
+        ports:
+          - 4318:4318
     env:
       DATABASE_URL: postgresql://ci:ci_only_password@localhost:5432/ci_main
       REDIS_URL: redis://localhost:6379
@@ -93,6 +99,17 @@ jobs:
         run: npm run boot:smoke
         env:
           LAB_ENABLED: 'true'
+
+      # Proves the OpenTelemetry SDK path end to end on the SHIPPED artifact: the tracer provider registers
+      # before pg/http/express load (see server.ts dynamic-import ordering), instrumentations activate, and
+      # the process still boots, serves, and drains cleanly. Export failing against the collector must not
+      # change the result — that resilience is exactly what this step guards.
+      - name: Boot smoke with tracing enabled (OTel SDK -> collector)
+        run: npm run boot:smoke
+        env:
+          LAB_ENABLED: 'true'
+          OTEL_ENABLED: 'true'
+          OTEL_EXPORTER_OTLP_ENDPOINT: 'http://localhost:4318'
 
       - name: Migration rollback smoke (down then up again)
         run: |

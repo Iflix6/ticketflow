@@ -1,7 +1,7 @@
 import { writeFileSync } from 'node:fs';
-import pg from 'pg';
 import { bootstrapConfig, ConfigError, type AppConfig } from '@ticketflow/config';
 import pino from 'pino';
+import { domainTracer, shutdownTracing, startTracing } from './tracing.js';
 import { relayOnce, backlogOf } from './outbox.js';
 import { sweepExpiries } from './expiry.js';
 import { reconcile, resolveStaleFindings } from './reconciliation.js';
@@ -54,6 +54,13 @@ async function main(): Promise<void> {
   }
 
   const log = createLogger(config);
+
+  // Register the tracer BEFORE `pg` is loaded so PgInstrumentation patches the Pool (tracing.ts ESM
+  // load-order note). `db.ts`/`queues.ts` import only pg TYPES, so this is the single runtime load site.
+  await startTracing(config, log, 'ticketflow-worker');
+  const tracer = domainTracer();
+  const pg = (await import('pg')).default;
+
   const pool = new pg.Pool({
     connectionString: config.DATABASE_URL,
     max: 5, // the worker is a poller, not a web server: a small pool keeps headroom for the API
@@ -124,22 +131,41 @@ async function main(): Promise<void> {
 
   const relayTimer = setInterval(() => {
     if (draining) return;
-    void relayOnce(pool, dispatcher, { batchSize: config.OUTBOX_BATCH_SIZE })
-      .then((result) => {
+    void tracer.startActiveSpan('outbox.relay', async (span) => {
+      try {
+        const result = await relayOnce(pool, dispatcher, { batchSize: config.OUTBOX_BATCH_SIZE });
+        span.setAttribute('outbox.claimed', result.claimed);
+        span.setAttribute('outbox.published', result.published);
+        span.setAttribute('outbox.failed', result.failed);
         if (result.claimed > 0) log.debug(result, 'outbox relay tick');
-      })
-      .catch((error: unknown) => log.error({ err: error }, 'outbox relay tick failed'));
+      } catch (error: unknown) {
+        span.recordException(error as Error);
+        log.error({ err: error }, 'outbox relay tick failed');
+      } finally {
+        span.end();
+      }
+    });
   }, config.OUTBOX_POLL_MS);
 
   const sweeperTimer = setInterval(() => {
     if (draining) return;
-    void (async () => {
-      const expired = await sweepExpiries(pool);
-      if (expired > 0) log.info({ expired }, 'sweeper expired overdue holds');
-      const findings = await reconcile(pool, { stuckThresholdSeconds: OUTBOX_STUCK_THRESHOLD_SECONDS });
-      if (findings.outboxStuck > 0 || findings.counterMismatch > 0) log.warn(findings, 'reconciliation findings');
-      await resolveStaleFindings(pool);
-    })().catch((error: unknown) => log.error({ err: error }, 'sweeper/reconcile tick failed'));
+    void tracer.startActiveSpan('reservation.sweep', async (span) => {
+      try {
+        const expired = await sweepExpiries(pool);
+        span.setAttribute('sweeper.expired', expired);
+        if (expired > 0) log.info({ expired }, 'sweeper expired overdue holds');
+        const findings = await reconcile(pool, { stuckThresholdSeconds: OUTBOX_STUCK_THRESHOLD_SECONDS });
+        span.setAttribute('reconcile.outbox_stuck', findings.outboxStuck);
+        span.setAttribute('reconcile.counter_mismatch', findings.counterMismatch);
+        if (findings.outboxStuck > 0 || findings.counterMismatch > 0) log.warn(findings, 'reconciliation findings');
+        await resolveStaleFindings(pool);
+      } catch (error: unknown) {
+        span.recordException(error as Error);
+        log.error({ err: error }, 'sweeper/reconcile tick failed');
+      } finally {
+        span.end();
+      }
+    });
   }, config.SWEEPER_INTERVAL_MS);
 
   log.info(
@@ -160,6 +186,7 @@ async function main(): Promise<void> {
     // `close()` waits for active jobs to finish, so a half-processed job never leaves a stale claim.
     void Promise.all([workers.close(), queues.close()])
       .then(() => pool.end())
+      .then(() => shutdownTracing())
       .then(() => log.info('worker shutdown complete'))
       .catch((error: unknown) => {
         log.error({ err: error }, 'error during shutdown');

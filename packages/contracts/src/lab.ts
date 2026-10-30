@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { LAB_RUN_STATES } from './state-machines.js';
 
 /**
  * Engineering Lab contracts.
@@ -59,7 +60,35 @@ export const createLabRunRequestSchema = z
   .strict();
 export type CreateLabRunRequest = z.infer<typeof createLabRunRequestSchema>;
 
-export const labRunStatusSchema = z.enum(['PENDING', 'RUNNING', 'COMPLETED', 'FAILED', 'ABORTED']);
+// Derived from the shared `state-machines.ts` tuple; parity with the `experiment_runs` CHECK is asserted
+// by `tests/integration/state-machine-parity.test.ts`.
+export const labRunStatusSchema = z.enum(LAB_RUN_STATES);
+
+/**
+ * Live-progress event envelope streamed by `GET /api/v1/lab/runs/{id}/progress` (SSE, `text/event-stream`).
+ * These are presentation-only frames for the lab dashboard; the run's authoritative record remains the
+ * immutable `experiment_runs` summary the SSE terminal event merely mirrors (spec: no invented metrics).
+ * Types only — no Zod schema, because a stream is not a request body validated at a boundary.
+ */
+export type LabRunPhase = 'reset' | 'running' | 'finalizing' | 'completed' | 'failed' | 'aborted';
+
+export type LabRunProgressEvent =
+  | { type: 'phase'; phase: LabRunPhase; runId: string; status: string; at: string }
+  | {
+      type: 'tick';
+      phase: 'running';
+      runId: string;
+      completed: number;
+      total: number;
+      succeeded: number;
+      soldOut: number;
+      conflict: number;
+      duplicate: number;
+      serverError: number;
+      timeout: number;
+      at: string;
+    }
+  | { type: 'summary'; phase: 'completed'; runId: string; status: string; outcomes: NonNullable<LabRunDto['outcomes']>; at: string };
 
 export const experimentOutcomeSchema = z.enum([
   'SUCCEEDED',

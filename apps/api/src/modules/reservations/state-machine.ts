@@ -1,11 +1,13 @@
 import type { ReservationStatus } from '@ticketflow/contracts';
+import { isLegalEdge, RESERVATION_TERMINAL, RESERVATION_TRANSITIONS } from '@ticketflow/contracts';
 import { AppError } from '../../shared/errors.js';
 
 /**
  * Reservation state machine (docs/architecture/data-model.md §4).
  *
- * These are the SAME rules the `reservations_enforce_transition` trigger enforces in PostgreSQL
- * (migration 0005). Duplicating the rule set in the service is deliberate, not redundant:
+ * The edge table lives in `@ticketflow/contracts` `state-machines.ts` — the single in-code source of truth
+ * shared with the wire enum — and this module is the service-side mirror of the `reservations_enforce_transition`
+ * DB trigger (migration 0005). Duplicating the rule in the service is deliberate, not redundant:
  * - the DB trigger is the un-bypassable backstop (a raw SQL mistake cannot create an illegal row);
  * - the service check gives a precise, typed `invalid_transition` error *before* a transaction is
  *   opened, and makes every legal/illegal edge a fast unit test rather than a database round trip.
@@ -13,15 +15,7 @@ import { AppError } from '../../shared/errors.js';
  * direction for a disagreement.
  */
 
-const LEGAL_TRANSITIONS: Readonly<Record<ReservationStatus, readonly ReservationStatus[]>> = {
-  PENDING: ['CONFIRMED', 'CANCELED', 'EXPIRED', 'FAILED'],
-  CONFIRMED: [],
-  CANCELED: [],
-  EXPIRED: [],
-  FAILED: [],
-};
-
-const TERMINAL: ReadonlySet<ReservationStatus> = new Set(['CONFIRMED', 'CANCELED', 'EXPIRED', 'FAILED']);
+const TERMINAL: ReadonlySet<ReservationStatus> = new Set<ReservationStatus>(RESERVATION_TERMINAL);
 
 export function isTerminal(status: ReservationStatus): boolean {
   return TERMINAL.has(status);
@@ -29,7 +23,7 @@ export function isTerminal(status: ReservationStatus): boolean {
 
 /** Re-setting a status to itself is a no-op, not a transition; treat it as legal so idempotent guards pass. */
 export function isLegalTransition(from: ReservationStatus, to: ReservationStatus): boolean {
-  return from === to || LEGAL_TRANSITIONS[from].includes(to);
+  return isLegalEdge(RESERVATION_TRANSITIONS, from, to);
 }
 
 export function assertTransition(from: ReservationStatus, to: ReservationStatus): void {

@@ -571,7 +571,29 @@ Use low-cardinality labels such as route templates and outcome codes. Do not use
 
 ### Distributed tracing
 
-Use OpenTelemetry spans to connect HTTP requests, database transactions, outbox publication, and background job processing. Propagate trace context across queue boundaries when supported.
+OpenTelemetry traces are wired in and **off by default**: the API and worker start a `NodeTracerProvider`
+only when `OTEL_ENABLED=true`, exporting OTLP/HTTP to `OTEL_EXPORTER_OTLP_ENDPOINT` (the collector in
+`compose.yaml` listens on `otel-collector:4318`, path `/v1/traces`). When disabled the SDK is never
+registered, so the manual spans below are cheap no-ops and no test, `npm run verify`, or `boot:smoke` run
+changes behaviour or timing.
+
+Because the entrypoints are ESM launched with plain `node` (no `--import` loader), each process starts
+tracing *first* and only then dynamically `import()`s the app graph, so the
+`require-in-the-middle` hooks patch `http`/`express`/`pg` before those modules are first loaded. What is
+instrumented:
+
+- **API** — `HttpInstrumentation`, `ExpressInstrumentation`, `PgInstrumentation` (automatic), plus manual
+  domain spans `db.tx.<label>` around every reservation transaction and `experiment.run` around a lab
+  fan-out (`apps/api/src/observability/tracing.ts`).
+- **Worker** — `PgInstrumentation` (automatic), plus manual `outbox.relay` and `reservation.sweep` spans on
+  the two periodic loops (`apps/worker/src/tracing.ts`).
+
+Span attributes stay bounded (strategy ids, outcome counts, transaction labels); a span *may* carry
+high-cardinality ids that a Prometheus label may not. The OTel collector is defined in
+`infra/otel/collector.yaml` and exercised by a dedicated CI job that boots the stack with
+`OTEL_ENABLED=true`. Known limitation, stated honestly: trace context is **not** propagated across the
+BullMQ queue boundary (no stable core BullMQ instrumentation is relied upon), so a worker span is a
+related-but-separate trace rather than a child of the originating HTTP request.
 
 ### Structured logs
 

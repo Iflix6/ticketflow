@@ -2,7 +2,9 @@ import Link from 'next/link';
 import { serverApi } from '../../../../lib/server-api';
 import { ErrorPanel } from '../../../../components/ErrorPanel';
 import { ResultsTable } from '../../../../components/ResultsTable';
+import { RunLiveProgress } from '../../../../components/RunLiveProgress';
 import { PageHeader, SectionLabel, Stat, StatusBadge } from '../../../../components/ui';
+import { Stagger } from '../../../../components/anim';
 import type { ExperimentResultWire, LabRunDto } from '../../../../lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -25,6 +27,10 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
   }
 
   const o = run.outcomes;
+  // A run still in flight (only reachable for a `?mode=live` run) gets the streaming SSE panel; the server
+  // refreshes to the immutable summary below the moment its terminal frame lands. A synchronous run's
+  // navigation already happened after completion, so it never renders in this state.
+  const inFlight = run.status === 'PENDING' || run.status === 'RUNNING';
 
   return (
     <div className="space-y-8">
@@ -49,13 +55,19 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
         actions={<StatusBadge value={run.status} />}
       />
 
+      {inFlight && (
+        <div className="rounded-xl2 border border-edge bg-panel p-5 shadow-1">
+          <RunLiveProgress runId={run.id} total={run.configuration.concurrentUsers} />
+        </div>
+      )}
+
       <section aria-labelledby="outcomes-heading" className="space-y-3">
         <SectionLabel id="outcomes-heading">Outcomes — server-aggregated</SectionLabel>
         {o === null ? (
           <p className="text-sm text-muted">This run has no aggregated outcomes yet (status {run.status}).</p>
         ) : (
           <>
-            <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <Stagger as="dl" className="grid grid-cols-2 gap-3 sm:grid-cols-4" step={0.04}>
               {(
                 [
                   ['Attempted', o.attempted],
@@ -70,8 +82,8 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
               ).map(([label, value]) => (
                 <Stat key={label} label={label} value={value.toLocaleString('en-US')} />
               ))}
-            </dl>
-            <dl className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+            </Stagger>
+            <Stagger as="dl" className="grid grid-cols-2 gap-3 sm:grid-cols-5" step={0.05} delay={0.1}>
               {(
                 [
                   ['p50', fmt(o.p50Ms, ' ms')],
@@ -83,7 +95,7 @@ export default async function RunDetailPage({ params }: { params: Promise<{ id: 
               ).map(([label, value]) => (
                 <Stat key={label} label={label} value={value} />
               ))}
-            </dl>
+            </Stagger>
             <p className="text-sm">
               Invariant violations:{' '}
               {o.invariantViolations > 0 ? (

@@ -10,6 +10,7 @@ import type { AppConfig } from '@ticketflow/config';
 import { ISOLATION_LEVELS, timeoutsFrom, withTransaction } from '../../db/transaction.js';
 import { isPgError } from '../../shared/errors.js';
 import type { Logger } from '../../observability/logger.js';
+import { domainTracer } from '../../observability/tracing.js';
 import { appMetrics } from '../../observability/metrics.js';
 import { labInvariantViolations } from './repository.js';
 
@@ -44,6 +45,26 @@ export type AttemptRecord = {
 };
 
 export type RunSummary = NonNullable<LabRunDto['outcomes']>;
+
+/**
+ * A live, in-flight tally of a run that has NOT finished yet — the running counterpart of
+ * {@link RunSummary}. Deliberately narrower than the final summary (no latency percentiles, no throughput,
+ * no duration, because none of those are meaningful until the fan-out completes); it carries only the
+ * counts a progress bar can honestly show mid-run.
+ */
+export type AttemptTally = {
+  completed: number;
+  total: number;
+  succeeded: number;
+  soldOut: number;
+  conflict: number;
+  duplicate: number;
+  serverError: number;
+  timeout: number;
+};
+
+/** Called after attempts complete (throttled by the runner); the SSE bus is its only production consumer. */
+export type ProgressCallback = (tally: AttemptTally) => void;
 
 export type RunOutcome = {
   attempts: AttemptRecord[];
@@ -95,6 +116,9 @@ function classifyThrown(error: unknown): AttemptOutcome {
 }
 
 export class ExperimentRunner {
+  // No-op when tracing is disabled; when enabled this nests the fan-out under the request's HTTP span.
+  private readonly tracer = domainTracer();
+
   constructor(
     private readonly db: Database,
     private readonly config: AppConfig,
@@ -107,7 +131,12 @@ export class ExperimentRunner {
    * (rampMs = 0 is a barrier start), bounded to `dbPoolMax` in-flight lanes so a huge fan-out queues on
    * the connection pool instead of exhausting it.
    */
-  async run(strategy: StrategyId, configuration: LabRunConfiguration, tierId: string): Promise<RunOutcome> {
+  async run(
+    strategy: StrategyId,
+    configuration: LabRunConfiguration,
+    tierId: string,
+    progress?: ProgressCallback,
+  ): Promise<RunOutcome> {
     const { concurrentUsers, quantityPerUser, reservationTtlSeconds, artificialDelayMs, rampMs, seed, dbPoolMax, isolation } =
       configuration;
     const random = seededRandom(seed);
@@ -122,6 +151,40 @@ export class ExperimentRunner {
     const startedAt = process.hrtime.bigint();
     const attempts: AttemptRecord[] = new Array<AttemptRecord>(concurrentUsers);
     let cursor = 0;
+
+    // Running tally + throttled emission. Node is single-threaded, so incrementing these between awaits is
+    // race-free. We do NOT emit one frame per attempt (a 5k-user run would spam the bus): emit at most every
+    // ~50ms, and ALWAYS emit a final frame once every attempt has landed, so a subscriber never sees a
+    // progress bar stuck one short of completion.
+    const tally: AttemptTally = {
+      completed: 0,
+      total: concurrentUsers,
+      succeeded: 0,
+      soldOut: 0,
+      conflict: 0,
+      duplicate: 0,
+      serverError: 0,
+      timeout: 0,
+    };
+    let lastEmitMs = 0;
+    const TICK_INTERVAL_MS = 50;
+    const bump = (outcome: ExperimentOutcome): void => {
+      tally.completed += 1;
+      if (outcome === 'SUCCEEDED') tally.succeeded += 1;
+      else if (outcome === 'SOLD_OUT') tally.soldOut += 1;
+      else if (outcome === 'CONFLICT') tally.conflict += 1;
+      else if (outcome === 'DUPLICATE') tally.duplicate += 1;
+      else if (outcome === 'SERVER_ERROR') tally.serverError += 1;
+      else if (outcome === 'TIMEOUT') tally.timeout += 1;
+    };
+    const maybeEmit = (force: boolean): void => {
+      if (progress === undefined) return;
+      const now = Date.now();
+      if (force || now - lastEmitMs >= TICK_INTERVAL_MS) {
+        lastEmitMs = now;
+        progress({ ...tally });
+      }
+    };
 
     const worker = async (): Promise<void> => {
       for (;;) {
@@ -149,16 +212,30 @@ export class ExperimentRunner {
           correlationId: `${tierId}:${index}`,
         };
         appMetrics.experimentRequests.inc({ strategy, outcome: result.outcome });
+        bump(result.outcome);
+        maybeEmit(false);
       }
     };
 
-    await Promise.all(Array.from({ length: lanes }, () => worker()));
-    const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+    // One span for the whole concurrent fan-out, parented to the request's HTTP/Express span so a lab
+    // run reads as: HTTP → experiment.run → per-attempt pg spans. Attributes are bounded enums/counts.
+    const span = this.tracer.startSpan('experiment.run', {
+      attributes: { 'experiment.strategy': strategy, 'experiment.attempted': concurrentUsers },
+    });
+    try {
+      await Promise.all(Array.from({ length: lanes }, () => worker()));
+      // Every attempt has landed: force the terminal tick so a watching client sees completion, not a stall.
+      maybeEmit(true);
+      const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
 
-    const invariantViolations = await labInvariantViolations(this.db);
-    const summary = this.summarize(attempts.filter((a): a is AttemptRecord => a !== undefined), durationMs, invariantViolations);
-    this.logger.debug({ strategy, attempted: concurrentUsers, succeeded: summary.succeeded, invariantViolations }, 'experiment run complete');
-    return { attempts, summary, invariantViolations };
+      const invariantViolations = await labInvariantViolations(this.db);
+      const summary = this.summarize(attempts.filter((a): a is AttemptRecord => a !== undefined), durationMs, invariantViolations);
+      span.setAttributes({ 'experiment.succeeded': summary.succeeded, 'experiment.invariant_violations': invariantViolations });
+      this.logger.debug({ strategy, attempted: concurrentUsers, succeeded: summary.succeeded, invariantViolations }, 'experiment run complete');
+      return { attempts, summary, invariantViolations };
+    } finally {
+      span.end();
+    }
   }
 
   private attempt(

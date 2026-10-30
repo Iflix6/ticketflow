@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { serverApi } from '../../lib/server-api';
 import { ErrorPanel, EmptyState } from '../../components/ErrorPanel';
 import { PageHeader, Badge } from '../../components/ui';
+import { Stagger } from '../../components/anim';
 import type { EventDto } from '../../lib/types';
 
 export const dynamic = 'force-dynamic'; // inventory and event status change; a cached catalog would lie
@@ -45,7 +46,7 @@ export default async function EventsPage() {
       {events.length === 0 ? (
         <EmptyState>No events seeded yet — run `npm run seed`.</EmptyState>
       ) : (
-        <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <Stagger as="ul" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" step={0.05}>
           {events.map((event) => {
             const status = STATUS[event.status];
             return (
@@ -67,7 +68,7 @@ export default async function EventsPage() {
               </li>
             );
           })}
-        </ul>
+        </Stagger>
       )}
     </div>
   );

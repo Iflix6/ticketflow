@@ -3,6 +3,7 @@ import { serverApi } from '../../../../lib/server-api';
 import { ErrorPanel } from '../../../../components/ErrorPanel';
 import { GroupedBars } from '../../../../components/GroupedBars';
 import { PageHeader, SectionLabel, Callout, StatusBadge } from '../../../../components/ui';
+import { Reveal, Stagger } from '../../../../components/anim';
 import type { LabRunDto } from '../../../../lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -77,9 +78,9 @@ export default async function CompareRunsPage({
         </div>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-2">
+      <Stagger as="div" className="grid gap-4 sm:grid-cols-2" step={0.08}>
         {[runA, runB].map((run, i) => (
-          <div key={run.id} className="rounded-xl border border-edge bg-panel p-4">
+          <div key={run.id} className="rounded-xl2 border border-edge bg-panel p-4 shadow-1">
             <div className="flex items-center justify-between gap-2">
               <h2 className="flex items-center gap-2 font-semibold">
                 <span aria-hidden className="inline-block h-3 w-3 rounded-full" style={{ backgroundColor: i === 0 ? SERIES_A : SERIES_B }} />
@@ -98,25 +99,27 @@ export default async function CompareRunsPage({
             </p>
           </div>
         ))}
-      </div>
+      </Stagger>
 
-      <GroupedBars
-        title="Outcome mix (counts from each run document)"
-        categories={outcomeKeys.map((k) => k)}
-        series={[
-          { name: `${runA.strategy} ${runA.id.slice(0, 6)}`, color: SERIES_A, values: outcomeKeys.map((k) => runA.outcomes?.[k] ?? 0) },
-          { name: `${runB.strategy} ${runB.id.slice(0, 6)}`, color: SERIES_B, values: outcomeKeys.map((k) => runB.outcomes?.[k] ?? 0) },
-        ]}
-      />
+      <Reveal className="grid gap-6">
+        <GroupedBars
+          title="Outcome mix (counts from each run document)"
+          categories={outcomeKeys.map((k) => k)}
+          series={[
+            { name: `${runA.strategy} ${runA.id.slice(0, 6)}`, color: SERIES_A, values: outcomeKeys.map((k) => runA.outcomes?.[k] ?? 0) },
+            { name: `${runB.strategy} ${runB.id.slice(0, 6)}`, color: SERIES_B, values: outcomeKeys.map((k) => runB.outcomes?.[k] ?? 0) },
+          ]}
+        />
 
-      <GroupedBars
-        title="Latency percentiles (ms)"
-        categories={['p50', 'p95', 'p99']}
-        series={[
-          { name: runA.strategy, color: SERIES_A, values: [runA.outcomes?.p50Ms, runA.outcomes?.p95Ms, runA.outcomes?.p99Ms].map((v) => v ?? 0) },
-          { name: runB.strategy, color: SERIES_B, values: [runB.outcomes?.p50Ms, runB.outcomes?.p95Ms, runB.outcomes?.p99Ms].map((v) => v ?? 0) },
-        ]}
-      />
+        <GroupedBars
+          title="Latency percentiles (ms)"
+          categories={['p50', 'p95', 'p99']}
+          series={[
+            { name: runA.strategy, color: SERIES_A, values: [runA.outcomes?.p50Ms, runA.outcomes?.p95Ms, runA.outcomes?.p99Ms].map((v) => v ?? 0) },
+            { name: runB.strategy, color: SERIES_B, values: [runB.outcomes?.p50Ms, runB.outcomes?.p95Ms, runB.outcomes?.p99Ms].map((v) => v ?? 0) },
+          ]}
+        />
+      </Reveal>
 
       <section className="space-y-3">
         <SectionLabel>Headline numbers</SectionLabel>

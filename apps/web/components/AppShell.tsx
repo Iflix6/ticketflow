@@ -22,12 +22,32 @@ interface ShellUser {
   role: string;
 }
 
+/** Where the current route lives, so the top bar can name the section the user is actually in. */
+const SECTION_TITLES: { match: (p: string) => boolean; title: string }[] = [
+  { match: (p) => p === '/' || p.startsWith('/events'), title: 'Events' },
+  { match: (p) => p.startsWith('/bookings'), title: 'My bookings' },
+  { match: (p) => p === '/login', title: 'Sign in' },
+  { match: (p) => p === '/lab' || p.startsWith('/lab/runs'), title: 'Experiment runs' },
+  { match: (p) => p.startsWith('/lab/scenario'), title: 'Scenario builder' },
+  { match: (p) => p.startsWith('/lab/strategies'), title: 'Strategies & SQL' },
+];
+
+function initials(email: string): string {
+  const handle = email.split('@')[0] ?? email;
+  const parts = handle.split(/[^a-zA-Z0-9]+/).filter(Boolean);
+  const first = parts[0]?.[0] ?? handle[0] ?? '?';
+  const second = parts[1]?.[0] ?? '';
+  return (first + second).toUpperCase();
+}
+
 /**
  * Dashboard chrome shared by every route: a persistent left rail (brand, grouped nav with honest
- * active states, environment badge) plus a sticky top bar (theme toggle, account). Server components
- * stay server components — this is the single client boundary for navigation, and it owns only
- * presentation/active-link logic. The real authorization boundary remains the API; nothing here gates
- * access, it only decides what is visible, exactly as the previous header did.
+ * active states, environment badge) plus a sticky top bar (section title, theme toggle, account).
+ * Server components stay server components — this is the single client boundary for navigation, and
+ * it owns only presentation/active-link logic. The real authorization boundary remains the API; nothing
+ * here gates access, it only decides what is visible, exactly as the previous header did. The rail and
+ * top bar animate in once on mount and the page body cross-fades on every route change (GSAP), all
+ * skipped under `prefers-reduced-motion`.
  */
 export function AppShell({ user, children }: { user: ShellUser | undefined; children: ReactNode }) {
   const pathname = usePathname();
@@ -37,6 +57,7 @@ export function AppShell({ user, children }: { user: ShellUser | undefined; chil
   const mainRef = useRef<HTMLElement | null>(null);
 
   const reduce = typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const sectionTitle = SECTION_TITLES.find((s) => s.match(pathname))?.title ?? 'TicketFlow';
 
   // Chrome entrance: the rail slides in and the top bar drops in once on first mount.
   useLayoutEffect(() => {
@@ -83,7 +104,7 @@ export function AppShell({ user, children }: { user: ShellUser | undefined; chil
   const rail = (
     <div className="flex h-full flex-col gap-1 p-4">
       <Link href="/events" className="mb-4 flex items-center gap-2.5 rounded-lg px-1 py-1">
-        <span className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-brand to-accent text-white shadow-sm shadow-brand/30">
+        <span className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-brand to-accent text-white shadow-2 shadow-brand/30">
           <IconBolt />
         </span>
         <span className="leading-tight">
@@ -101,13 +122,17 @@ export function AppShell({ user, children }: { user: ShellUser | undefined; chil
                 <Link
                   href={item.href}
                   aria-current={item.active ? 'page' : undefined}
-                  className={`flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors ${
+                  className={`group relative flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors ${
                     item.active
                       ? 'bg-brand/10 font-medium text-brand ring-1 ring-inset ring-brand/20'
                       : 'text-muted hover:bg-elevated hover:text-ink'
                   }`}
                 >
-                  <item.icon className={item.active ? 'text-brand' : ''} />
+                  {/* Active accent bar: an unambiguous "you are here" beyond color alone. */}
+                  {item.active && (
+                    <span aria-hidden className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-brand" />
+                  )}
+                  <item.icon className={item.active ? 'text-brand' : 'opacity-80 group-hover:opacity-100'} />
                   {item.label}
                 </Link>
               </li>
@@ -116,7 +141,7 @@ export function AppShell({ user, children }: { user: ShellUser | undefined; chil
         </div>
       ))}
 
-      <div className="mt-auto pt-4">
+      <div className="mt-auto space-y-2 pt-4">
         <div className="flex items-center gap-2 rounded-lg border border-edge bg-elevated px-3 py-2 text-xs text-muted">
           <span className="rounded bg-amber-400/15 px-1.5 py-0.5 font-mono text-amber-600 dark:text-amber-300">local</span>
           synthetic data · fake payments
@@ -126,44 +151,56 @@ export function AppShell({ user, children }: { user: ShellUser | undefined; chil
   );
 
   return (
-    <div className="min-h-screen bg-app text-ink">
+    <div className="min-h-screen text-ink">
       {/* Desktop rail */}
-      <aside ref={railRef} className="fixed inset-y-0 left-0 hidden w-64 border-r border-edge bg-panel lg:block">{rail}</aside>
+      <aside ref={railRef} className="fixed inset-y-0 left-0 z-20 hidden w-64 border-r border-edge bg-panel/90 backdrop-blur lg:block">
+        {rail}
+      </aside>
 
       {/* Mobile drawer */}
       {open && (
         <div className="fixed inset-0 z-40 lg:hidden">
-          <div className="absolute inset-0 bg-black/40" onClick={() => setOpen(false)} aria-hidden />
-          <aside className="absolute inset-y-0 left-0 w-64 border-r border-edge bg-panel shadow-xl">{rail}</aside>
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setOpen(false)} aria-hidden />
+          <aside className="absolute inset-y-0 left-0 w-64 border-r border-edge bg-panel shadow-3">{rail}</aside>
         </div>
       )}
 
       <div className="lg:pl-64">
         <header ref={headerRef} className="sticky top-0 z-30 border-b border-edge bg-panel/80 backdrop-blur">
           <div className="mx-auto flex h-14 max-w-6xl items-center justify-between gap-3 px-4">
-            <button
-              type="button"
-              onClick={() => setOpen((v) => !v)}
-              aria-label={open ? 'Close navigation' : 'Open navigation'}
-              className="grid h-9 w-9 place-items-center rounded-lg border border-edge text-muted hover:bg-elevated hover:text-ink lg:hidden"
-            >
-              {open ? <IconClose /> : <IconMenu />}
-            </button>
-            <span className="ml-auto" />
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setOpen((v) => !v)}
+                aria-label={open ? 'Close navigation' : 'Open navigation'}
+                className="grid h-9 w-9 place-items-center rounded-lg border border-edge text-muted hover:bg-elevated hover:text-ink lg:hidden"
+              >
+                {open ? <IconClose /> : <IconMenu />}
+              </button>
+              <span className="text-sm font-semibold tracking-tight text-ink">{sectionTitle}</span>
+            </div>
             <div className="flex items-center gap-2.5">
               <ThemeToggle />
               {user === undefined ? (
                 <Link
                   href="/login"
-                  className="rounded-lg bg-brand px-3 py-1.5 text-sm font-medium text-brand-ink hover:brightness-110"
+                  className="rounded-lg bg-brand px-3 py-1.5 text-sm font-medium text-brand-ink shadow-2 shadow-brand/25 transition hover:brightness-110"
                 >
                   Sign in
                 </Link>
               ) : (
                 <span className="flex items-center gap-2">
-                  <span className="hidden items-center gap-2 rounded-lg border border-edge bg-elevated px-2.5 py-1 text-xs sm:flex">
-                    <span className="font-medium text-ink">{user.email}</span>
-                    <span className="rounded bg-brand/10 px-1.5 py-0.5 font-mono text-brand">{user.role}</span>
+                  <span className="hidden items-center gap-2 rounded-lg border border-edge bg-elevated py-1 pl-1 pr-2.5 sm:flex">
+                    <span
+                      aria-hidden
+                      className="grid h-7 w-7 place-items-center rounded-md bg-gradient-to-br from-brand to-accent text-xs font-semibold text-white"
+                    >
+                      {initials(user.email)}
+                    </span>
+                    <span className="leading-tight">
+                      <span className="block text-xs font-medium text-ink">{user.email}</span>
+                      <span className="block font-mono text-[10px] text-brand">{user.role}</span>
+                    </span>
                   </span>
                   <LogoutButton />
                 </span>
@@ -172,11 +209,11 @@ export function AppShell({ user, children }: { user: ShellUser | undefined; chil
           </div>
         </header>
 
-        <main id="main" ref={mainRef} className="mx-auto max-w-6xl px-4 py-6 sm:py-8">
+        <main id="main" ref={mainRef} className="relative z-10 mx-auto max-w-6xl px-4 py-6 sm:py-8">
           {children}
         </main>
 
-        <footer className="mx-auto max-w-6xl px-4 py-8 text-xs text-muted">
+        <footer className="relative z-10 mx-auto max-w-6xl px-4 py-8 text-xs text-muted">
           Local reliability lab — synthetic data, fake payments, seeded demo accounts. Environment:
           <span className="ml-1 rounded bg-amber-400/15 px-1.5 py-0.5 font-mono text-amber-600 dark:text-amber-300">local</span>
         </footer>

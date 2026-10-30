@@ -1,4 +1,5 @@
 export * from './http.js';
+export * from './state-machines.js';
 export * from './domain.js';
 export * from './lab.js';
 

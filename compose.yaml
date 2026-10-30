@@ -81,6 +81,10 @@ services:
       AUTH_SECRET: ${AUTH_SECRET:-local_only_secret_replace_me_please_32chars}
       LAB_ENABLED: ${LAB_ENABLED:-false}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Tracing is OFF by default; the collector only exists under the monitoring/tracing profiles, and
+      # the SDK is defensive (an unreachable collector never blocks boot). Point it at the service name.
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
     ports:
       - '127.0.0.1:4000:4000'
     healthcheck:
@@ -115,6 +119,8 @@ services:
       # Bind inside the compose network so Prometheus (same network) can scrape it.
       WORKER_METRICS_HOST: 0.0.0.0
       WORKER_METRICS_PORT: '9464'
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
     networks: [ticketflow]
     ports:
       - '127.0.0.1:9464:9464'

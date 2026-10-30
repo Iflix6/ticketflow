@@ -1,10 +1,11 @@
-import type { LabRunConfiguration, LabRunDto, StrategyId, FixtureResetRequest } from '@ticketflow/contracts';
+import type { LabRunConfiguration, LabRunDto, StrategyId, FixtureResetRequest, LabRunProgressEvent } from '@ticketflow/contracts';
 import type { AppConfig } from '@ticketflow/config';
 import type { Database } from '../../db/pool.js';
 import type { Logger } from '../../observability/logger.js';
 import { AppError } from '../../shared/errors.js';
 import type { AuthenticatedUser } from '../auth/types.js';
-import { ExperimentRunner } from './runner.js';
+import { ExperimentRunner, type AttemptTally } from './runner.js';
+import { publishProgress } from './progress-bus.js';
 import {
   collectHostInfo,
   finalizeRun,
@@ -32,10 +33,19 @@ import {
 export class LabService {
   private readonly runner: ExperimentRunner;
 
+  /**
+   * Serialized background chain for asynchronous (`mode=live`) runs. The isolated `lab` schema holds ONE
+   * fixture, so two concurrent runs would clobber each other's `lab.inventory` if their resets and fan-outs
+   * interleaved. Chaining every async run onto this single promise guarantees reset → run → finalize happens
+   * one at a time. (The synchronous `createRun` path is used by tests/e2e and remains the caller's own
+   * request; the local lab is a single-operator dashboard, so sync-vs-live overlap is out of scope.)
+   */
+  private backgroundQueue: Promise<void> = Promise.resolve();
+
   constructor(
     private readonly db: Database,
     private readonly config: AppConfig,
-    logger: Logger,
+    private readonly logger: Logger,
   ) {
     this.runner = new ExperimentRunner(db, config, logger);
   }
@@ -90,6 +100,76 @@ export class LabService {
     const row = await getRun(this.db, runId);
     if (row === undefined) throw new AppError('internal_error', 'Run vanished immediately after completion');
     return toLabRunDto(row);
+  }
+
+  /**
+   * Opens an ASYNCHRONOUS run (`?mode=live`): creates the PENDING record and returns immediately so the
+   * caller can open the SSE progress stream, then executes the fan-out on the serialized background chain.
+   * The fixture reset is deliberately deferred into the queued execution (NOT done here) precisely so a
+   * second `openRun` cannot reset the single `lab` fixture while a first run is still mid-flight.
+   */
+  async openRun(user: AuthenticatedUser, strategy: StrategyId, configuration: LabRunConfiguration, label: string | null): Promise<LabRunDto> {
+    if (strategy === 'unsafe_lab' && !(this.config.LAB_ENABLED && this.config.NODE_ENV !== 'production')) {
+      throw new AppError('lab_disabled', 'The unsafe baseline requires the lab to be enabled');
+    }
+    const hostInfo = await collectHostInfo(this.db);
+    const runId = await insertRun(this.db, {
+      strategy,
+      configuration,
+      label,
+      environment: this.config.NODE_ENV,
+      gitSha: this.config.GIT_SHA ?? null,
+      hostInfo,
+      createdBy: user.id,
+    });
+
+    // Enqueue the whole execution (reset → running → fan-out → finalize) behind any prior async run.
+    this.backgroundQueue = this.backgroundQueue
+      .then(() => this.executeAsync(runId, strategy, configuration))
+      .catch(() => undefined); // never let one run's failure poison the chain for later runs
+
+    const row = await getRun(this.db, runId);
+    if (row === undefined) throw new AppError('internal_error', 'Run vanished immediately after creation');
+    return toLabRunDto(row);
+  }
+
+  /** The deferred half of {@link openRun}: runs entirely on the background chain, publishing progress. */
+  private async executeAsync(runId: string, strategy: StrategyId, configuration: LabRunConfiguration): Promise<void> {
+    const now = (): string => new Date().toISOString();
+    try {
+      const tierCount = 1;
+      await resetLabFixture(this.db, configuration.seed, configuration.capacity, tierCount);
+      const tierId = await labTierId(this.db, configuration.seed, 1);
+      await markRunRunning(this.db, runId);
+      publishProgress(runId, { type: 'phase', phase: 'running', runId, status: 'RUNNING', at: now() });
+
+      const outcome = await this.runner.run(strategy, configuration, tierId, (tally: AttemptTally) => {
+        const event: LabRunProgressEvent = { type: 'tick', phase: 'running', runId, ...tally, at: now() };
+        publishProgress(runId, event);
+      });
+
+      await recordResults(
+        this.db,
+        runId,
+        outcome.attempts.map((a) => ({
+          requestIndex: a.requestIndex,
+          actorLabel: a.actorLabel,
+          outcome: a.outcome,
+          httpStatus: a.httpStatus,
+          latencyMicros: a.latencyMicros,
+          failureClass: a.failureClass,
+          correlationId: a.correlationId,
+        })),
+      );
+      await finalizeRun(this.db, runId, { status: 'COMPLETED', outcomes: outcome.summary });
+      publishProgress(runId, { type: 'summary', phase: 'completed', runId, status: 'COMPLETED', outcomes: outcome.summary, at: now() });
+    } catch (error) {
+      // Same honesty rule as the synchronous path: a run that could not finish gets a terminal FAILED record
+      // (no flattering summary) and the failure is streamed, never swallowed silently into a stuck UI.
+      await finalizeRun(this.db, runId, { status: 'FAILED', outcomes: null }).catch(() => undefined);
+      publishProgress(runId, { type: 'phase', phase: 'failed', runId, status: 'FAILED', at: now() });
+      this.logger.warn({ runId, strategy, err: error }, 'async lab run failed during background execution');
+    }
   }
 
   async listRuns(page: number, pageSize: number): Promise<{ rows: LabRunDto[]; total: number }> {

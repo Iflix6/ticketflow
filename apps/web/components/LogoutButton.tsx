@@ -24,17 +24,17 @@ export function LogoutButton() {
   }
 
   return (
-    <span>
+    <span className="flex items-center gap-2">
       <button
         type="button"
         onClick={onClick}
         disabled={busy}
-        className="rounded border border-slate-300 px-2 py-1 text-xs hover:bg-slate-100 disabled:opacity-50"
+        className="rounded-lg border border-edge px-2.5 py-1.5 text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-ink disabled:opacity-50"
       >
         {busy ? 'Signing out…' : 'Sign out'}
       </button>
       {failed && (
-        <span role="status" className="ml-1 text-xs text-red-700">
+        <span role="status" className="text-xs text-danger">
           Sign-out failed; you are still signed in.
         </span>
       )}

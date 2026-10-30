@@ -111,6 +111,9 @@ suite('docs/api/openapi.yaml resolves against the live route table', () => {
       'GET /api/v1/bookings/{id}': { id: bookingId },
       'GET /api/v1/lab/runs/{id}': { id: runId },
       'GET /api/v1/lab/runs/{id}/results': { id: runId },
+      // The run above is COMPLETED (sync creation), so the SSE handler answers one terminal frame then
+      // closes — the parity request resolves promptly instead of hanging on an open stream.
+      'GET /api/v1/lab/runs/{id}/progress': { id: runId },
     };
   });
 
@@ -271,6 +274,7 @@ function recipesFor(secrets: {
     'POST /api/v1/lab/runs': { auth: adminAuth, body: LAB_RUN_BODY },
     'GET /api/v1/lab/runs/{id}': { auth: adminAuth },
     'GET /api/v1/lab/runs/{id}/results': { auth: adminAuth },
+    'GET /api/v1/lab/runs/{id}/progress': { auth: adminAuth },
     'POST /api/v1/lab/fixtures/reset': { auth: adminAuth, body: { capacity: 3, tiers: 1 } },
   } satisfies Record<string, Recipe>;
   return recipes;

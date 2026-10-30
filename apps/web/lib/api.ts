@@ -82,3 +82,13 @@ export async function browserApiRaw<T>(
 export function isApiCallError(error: unknown): error is ApiCallError {
   return error instanceof ApiCallError;
 }
+
+/**
+ * Absolute (origin-relative) URL for a run's Server-Sent-Events progress stream. `EventSource` cannot
+ * set headers, so authentication rides the SAME first-party session cookie the `/api/v1` proxy already
+ * carries (see `next.config.ts`) — the URL is intentionally a plain path so it resolves on the web app's
+ * own origin and the cookie is sent automatically with `withCredentials`.
+ */
+export function labRunProgressUrl(runId: string): string {
+  return `/api/v1/lab/runs/${runId}/progress`;
+}

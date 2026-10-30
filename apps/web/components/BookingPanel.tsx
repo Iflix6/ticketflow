@@ -1,8 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import gsap from 'gsap';
 import { browserApi, browserApiRaw, isApiCallError } from '../lib/api';
 import type { BookingDto, ReservationDto, TierWithInventory } from '../lib/types';
+import { buttonClass, Badge, Meter, StatusBadge } from './ui';
 
 /**
  * Reserve → countdown → fake checkout, per tier. Rules this component lives by (all from the
@@ -15,6 +17,9 @@ import type { BookingDto, ReservationDto, TierWithInventory } from '../lib/types
  *   renders, and at zero the component re-reads the reservation instead of declaring expiry.
  * - Displayed money is the server's decimal string; the estimated total is computed in integer
  *   cents, never floats. The authoritative amount is only ever the checkout response's totalAmount.
+ * The availability meter draws the server's own `available`/`capacity` integers (it never recomputes
+ * them), and the status region reveals with a short GSAP motion on every phase change — reduced-motion
+ * safe, and purely presentational.
  */
 
 function priceInCents(priceDisplayOnly: string): number {
@@ -26,6 +31,9 @@ const centsToString = (cents: number): string => `${Math.floor(cents / 100)}.${S
 
 type Phase = 'idle' | 'holding' | 'held' | 'paying' | 'done' | 'dead';
 
+const field =
+  'rounded-lg border border-edge bg-app px-2.5 py-1.5 text-sm text-ink outline-none transition-colors focus:border-brand focus:bg-panel';
+
 export function BookingPanel({ tier, userName }: { tier: TierWithInventory; userName: string }) {
   const { tier: t, inventory } = tier;
   const [quantity, setQuantity] = useState(1);
@@ -36,6 +44,7 @@ export function BookingPanel({ tier, userName }: { tier: TierWithInventory; user
   const [error, setError] = useState<string | undefined>();
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [outcome, setOutcome] = useState<'success' | 'failure' | 'timeout'>('success');
+  const statusRef = useRef<HTMLDivElement>(null);
 
   // One shared countdown tick for every panel on the page.
   useEffect(() => {
@@ -50,6 +59,15 @@ export function BookingPanel({ tier, userName }: { tier: TierWithInventory; user
       void refreshReservation(reservation.id);
     }
   }, [secondsLeft]);
+
+  // The status region reveals on each phase transition so the state change is felt, not just read.
+  useLayoutEffect(() => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches || statusRef.current === null) return;
+    const ctx = gsap.context(() => {
+      gsap.from(statusRef.current, { autoAlpha: 0, y: 8, duration: 0.3, ease: 'power2.out' });
+    }, statusRef);
+    return () => ctx.revert();
+  }, [phase]);
 
   async function holdSeats() {
     setPhase('holding');
@@ -153,24 +171,47 @@ export function BookingPanel({ tier, userName }: { tier: TierWithInventory; user
 
   const estimatedCents = priceInCents(t.priceDisplayOnly) * quantity;
   const status = reservation?.status ?? booking?.status;
+  const soldOut = inventory.available <= 0;
+  const tone = soldOut ? 'danger' : inventory.available <= inventory.capacity * 0.15 ? 'warn' : 'brand';
 
   return (
-    <article className="rounded-lg border border-slate-200 bg-white p-4">
-      <h3 className="font-semibold">{t.name}</h3>
-      <p className="text-sm text-slate-600">
-        {t.currency} {t.priceDisplayOnly} each · {inventory.available} of {inventory.capacity} available
-      </p>
+    <article className="rounded-xl2 border border-edge bg-panel p-5 shadow-1 transition-shadow hover:shadow-2">
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div className="space-y-1">
+          <h3 className="font-semibold text-ink">{t.name}</h3>
+          <p className="text-sm text-muted">
+            <span className="font-medium text-ink tabular-nums">
+              {t.currency} {t.priceDisplayOnly}
+            </span>{' '}
+            each
+          </p>
+        </div>
+        {soldOut ? <Badge tone="danger">Sold out</Badge> : <Badge tone="ok">{inventory.available} available</Badge>}
+      </header>
+
+      <div className="mt-3">
+        <Meter
+          value={inventory.available}
+          max={inventory.capacity}
+          tone={tone}
+          label={
+            <span className="tabular-nums">
+              {inventory.available} of {inventory.capacity} available
+            </span>
+          }
+        />
+      </div>
 
       {phase === 'idle' && (
         <form
-          className="mt-3 flex flex-wrap items-end gap-3"
+          className="mt-4 flex flex-wrap items-end gap-3"
           onSubmit={(e) => {
             e.preventDefault();
             void holdSeats();
           }}
         >
           <div>
-            <label htmlFor={`qty-${t.id}`} className="block text-xs font-medium">
+            <label htmlFor={`qty-${t.id}`} className="block text-xs font-medium text-muted">
               Quantity (1–10, per reservation)
             </label>
             <input
@@ -180,33 +221,42 @@ export function BookingPanel({ tier, userName }: { tier: TierWithInventory; user
               max={10}
               value={quantity}
               onChange={(e) => setQuantity(Math.min(10, Math.max(1, Number(e.target.value) || 1)))}
-              className="mt-1 w-20 rounded border border-slate-300 px-2 py-1"
+              className={`mt-1 w-20 ${field}`}
             />
           </div>
-          <button type="submit" className="rounded bg-blue-700 px-3 py-1.5 text-sm text-white hover:bg-blue-800 disabled:opacity-50">
+          <button
+            type="submit"
+            disabled={soldOut}
+            className={`${buttonClass('primary', 'sm')} mt-1`}
+          >
             Hold {quantity} seat{quantity === 1 ? '' : 's'} — est. {t.currency} {centsToString(estimatedCents)}
           </button>
         </form>
       )}
 
-      {phase === 'holding' && <p className="mt-3 text-sm text-slate-600">Holding seats…</p>}
+      {phase === 'holding' && (
+        <p className="mt-4 flex items-center gap-2 text-sm text-muted">
+          <span aria-hidden className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-brand border-t-transparent" />
+          Holding seats…
+        </p>
+      )}
 
       {phase === 'held' && reservation !== undefined && (
-        <div className="mt-3 space-y-3">
+        <div className="mt-4 space-y-3">
           <p role="status" aria-live="polite" className="text-sm">
-            Hold <span className="font-mono text-xs">{reservation.id.slice(0, 8)}</span> (
-            {reservation.quantity} × {t.name}) — <strong>{secondsLeft}s</strong> left to confirm.
+            Hold <span className="font-mono text-xs text-brand">{reservation.id.slice(0, 8)}</span> (
+            {reservation.quantity} × {t.name}) — <strong className="tabular-nums text-ink">{secondsLeft}s</strong> left to confirm.
           </p>
           <div className="flex flex-wrap items-end gap-3">
             <div>
-              <label htmlFor={`outcome-${t.id}`} className="block text-xs font-medium">
+              <label htmlFor={`outcome-${t.id}`} className="block text-xs font-medium text-muted">
                 Fake payment outcome (deterministic knob, never real money)
               </label>
               <select
                 id={`outcome-${t.id}`}
                 value={outcome}
                 onChange={(e) => setOutcome(e.target.value as typeof outcome)}
-                className="mt-1 rounded border border-slate-300 px-2 py-1"
+                className={`mt-1 ${field}`}
               >
                 <option value="success">success</option>
                 <option value="failure">failure</option>
@@ -214,55 +264,73 @@ export function BookingPanel({ tier, userName }: { tier: TierWithInventory; user
               </select>
             </div>
             {/* No disabled flag needed: starting checkout/cancel flips the phase, which unmounts these buttons. */}
-            <button type="button" onClick={() => void checkout()} className="rounded bg-green-700 px-3 py-1.5 text-sm text-white hover:bg-green-800">
+            <button type="button" onClick={() => void checkout()} className={`${buttonClass('success', 'sm')} mt-1`}>
               Pay now
             </button>
-            <button type="button" onClick={() => void cancel()} className="rounded border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100">
+            <button type="button" onClick={() => void cancel()} className={`${buttonClass('outline', 'sm')} mt-1`}>
               Cancel hold
             </button>
           </div>
         </div>
       )}
 
-      {phase === 'paying' && <p className="mt-3 text-sm text-slate-600">Contacting fake provider…</p>}
-
-      {phase === 'done' && (
-        <div className="mt-3 space-y-2">
-          {/* Both conditions are state, not a narrowing dance: a server re-render of this panel can
-              legitimately see done-without-booking (refresh between phases), and must degrade, not crash. */}
-          {booking !== undefined && (
-            <p role="status" className="text-sm font-medium text-green-800">
-              Booking {booking.id.slice(0, 8)} — {booking.status}, server total {booking.currency} {booking.totalAmount}.
-            </p>
-          )}
-          {booking === undefined && (
-            <p role="status" className="text-sm font-medium text-green-800">
-              This hold is {status ?? 'confirmed on the server'}.
-            </p>
-          )}
-          <p className="text-xs text-slate-500">Signed in as {userName}; visible under My bookings.</p>
-        </div>
-      )}
-
-      {phase === 'dead' && (
-        <p role="status" className="mt-3 text-sm text-slate-700">
-          This hold ended ({status}).{' '}
-          <button type="button" onClick={() => { setPhase('idle'); setReservation(undefined); setBooking(undefined); }}>
-            Start a new hold
-          </button>
+      {phase === 'paying' && (
+        <p className="mt-4 flex items-center gap-2 text-sm text-muted">
+          <span aria-hidden className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-brand border-t-transparent" />
+          Contacting fake provider…
         </p>
       )}
 
-      {notice !== undefined && (
-        <p role="status" className="mt-2 rounded bg-sky-50 p-2 text-xs text-sky-900">
-          {notice}
-        </p>
-      )}
-      {error !== undefined && (
-        <p role="alert" className="mt-2 rounded bg-red-50 p-2 text-xs text-red-800">
-          {error}
-        </p>
-      )}
+      <div ref={statusRef}>
+        {phase === 'done' && (
+          <div className="mt-4 space-y-2 rounded-xl border border-ok/25 bg-ok/10 p-3">
+            {/* Both conditions are state, not a narrowing dance: a server re-render of this panel can
+                legitimately see done-without-booking (refresh between phases), and must degrade, not crash. */}
+            {booking !== undefined && (
+              <p role="status" className="flex flex-wrap items-center gap-2 text-sm font-medium text-ok">
+                <StatusBadge value={booking.status} />
+                Booking <span className="font-mono text-xs">{booking.id.slice(0, 8)}</span>, server total{' '}
+                <span className="tabular-nums">
+                  {booking.currency} {booking.totalAmount}
+                </span>
+                .
+              </p>
+            )}
+            {booking === undefined && (
+              <p role="status" className="text-sm font-medium text-ok">This hold is {status ?? 'confirmed on the server'}.</p>
+            )}
+            <p className="text-xs text-muted">Signed in as {userName}; visible under My bookings.</p>
+          </div>
+        )}
+
+        {phase === 'dead' && (
+          <p role="status" className="mt-4 text-sm text-muted">
+            This hold ended ({status}).{' '}
+            <button
+              type="button"
+              onClick={() => {
+                setPhase('idle');
+                setReservation(undefined);
+                setBooking(undefined);
+              }}
+              className="font-medium text-brand underline underline-offset-2"
+            >
+              Start a new hold
+            </button>
+          </p>
+        )}
+
+        {notice !== undefined && (
+          <p role="status" className="mt-3 rounded-lg bg-info/10 p-2.5 text-xs text-info">
+            {notice}
+          </p>
+        )}
+        {error !== undefined && (
+          <p role="alert" className="mt-3 rounded-lg bg-danger/10 p-2.5 text-xs text-danger">
+            {error}
+          </p>
+        )}
+      </div>
     </article>
   );
 }

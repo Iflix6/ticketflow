@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { BOOKING_STATES, PAYMENT_ATTEMPT_STATES, RESERVATION_STATES } from './state-machines.js';
 
 /**
  * Money is transported as an exact decimal string (never a float) and is display-only in this lab:
@@ -54,13 +55,9 @@ export const tierWithInventorySchema = z.object({
 });
 export type TierWithInventoryDto = z.infer<typeof tierWithInventorySchema>;
 
-export const reservationStatusSchema = z.enum([
-  'PENDING',
-  'CONFIRMED',
-  'EXPIRED',
-  'CANCELED',
-  'FAILED',
-]);
+// Derived from the shared state-machine tuples (see `state-machines.ts`), so the wire enum and the
+// `CHECK (status IN (...))` constraint the parity test reads can never be separate hand-copied literals.
+export const reservationStatusSchema = z.enum(RESERVATION_STATES);
 export type ReservationStatus = z.infer<typeof reservationStatusSchema>;
 
 export const reservationSchema = z.object({
@@ -95,7 +92,7 @@ export const idempotencyKeySchema = z
   .max(128)
   .regex(/^[A-Za-z0-9_-]+$/, 'Idempotency-Key must be URL-safe');
 
-export const bookingStatusSchema = z.enum(['PENDING_PAYMENT', 'CONFIRMED', 'CANCELED', 'FAILED']);
+export const bookingStatusSchema = z.enum(BOOKING_STATES);
 export type BookingStatus = z.infer<typeof bookingStatusSchema>;
 
 export const bookingSchema = z.object({
@@ -118,11 +115,14 @@ export const checkoutRequestSchema = z
   .strict();
 export type CheckoutRequest = z.infer<typeof checkoutRequestSchema>;
 
+export const paymentAttemptStatusSchema = z.enum(PAYMENT_ATTEMPT_STATES);
+export type PaymentAttemptStatus = z.infer<typeof paymentAttemptStatusSchema>;
+
 export const paymentAttemptSchema = z.object({
   id: z.uuid(),
   bookingId: z.uuid(),
   providerReference: z.string(),
-  status: z.enum(['PENDING', 'SUCCEEDED', 'FAILED', 'TIMEOUT', 'SUCCEEDED_NOT_FULFILLED']),
+  status: paymentAttemptStatusSchema,
   requestedAt: z.iso.datetime({ offset: true }),
   completedAt: z.iso.datetime({ offset: true }).nullable(),
 });

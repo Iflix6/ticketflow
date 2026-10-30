@@ -4,6 +4,7 @@ import { serverApi, isApiCallError } from '../../lib/server-api';
 import { ErrorPanel, EmptyState } from '../../components/ErrorPanel';
 import { getSessionUser } from '../../lib/session';
 import { PageHeader, StatusBadge } from '../../components/ui';
+import { Stagger } from '../../components/anim';
 import type { BookingDto } from '../../lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -56,9 +57,9 @@ export default async function BookingsPage() {
                   <th scope="col" className="px-4 py-2.5 font-medium">Confirmed</th>
                 </tr>
               </thead>
-              <tbody>
+              <Stagger as="tbody" step={0.05}>
                 {bookings.map((b) => (
-                  <tr key={b.id} className="border-t border-edge">
+                  <tr key={b.id} className="border-t border-edge transition-colors hover:bg-elevated/60">
                     <td className="px-4 py-2.5 font-mono text-xs">{b.id.slice(0, 8)}</td>
                     <td className="px-4 py-2.5">
                       <StatusBadge value={b.status} />
@@ -69,7 +70,7 @@ export default async function BookingsPage() {
                     <td className="px-4 py-2.5 text-muted">{b.confirmedAt ? new Date(b.confirmedAt).toLocaleString() : '—'}</td>
                   </tr>
                 ))}
-              </tbody>
+              </Stagger>
             </table>
           </div>
         </div>

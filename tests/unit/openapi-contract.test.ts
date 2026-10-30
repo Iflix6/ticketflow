@@ -156,7 +156,7 @@ describe('docs/api/openapi.yaml matches the implemented routes', () => {
     const publicPaths = registeredRoutes(publicApp as unknown as { router: { stack: unknown[] } }).map(
       (route) => route.path,
     );
-    expect(publicPaths.filter((p) => ['/token', '/strategies', '/runs', '/runs/:id', '/runs/:id/results', '/fixtures/reset'].includes(p))).toEqual([]);
+    expect(publicPaths.filter((p) => ['/token', '/strategies', '/runs', '/runs/:id', '/runs/:id/results', '/runs/:id/progress', '/fixtures/reset'].includes(p))).toEqual([]);
     expect(publicPaths).toEqual(expect.arrayContaining(['/session', '/session/rotate', '/session/logout']));
     expect(publicPaths).toEqual(expect.arrayContaining(['/', '/:id', '/:id/cancel', '/:id/checkout']));
   });

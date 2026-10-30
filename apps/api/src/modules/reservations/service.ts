@@ -6,11 +6,13 @@ import type {
   ReservationDto,
 } from '@ticketflow/contracts';
 import { SAFE_STRATEGY_IDS } from '@ticketflow/contracts';
+import { trace } from '@opentelemetry/api';
 import type { AppConfig } from '@ticketflow/config';
 import type { Database, Queryable } from '../../db/pool.js';
 import { asQueryable } from '../../db/pool.js';
 import { ISOLATION_LEVELS, retryPolicyFrom, runWithTransientRetry, timeoutsFrom, withTransaction } from '../../db/transaction.js';
 import type { Logger } from '../../observability/logger.js';
+import { domainTracer } from '../../observability/tracing.js';
 import { appMetrics } from '../../observability/metrics.js';
 import type { AuthenticatedUser } from '../auth/types.js';
 import { AppError } from '../../shared/errors.js';
@@ -74,6 +76,9 @@ const PUBLIC_STRATEGIES = new Set<string>(SAFE_STRATEGY_IDS);
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 export class ReservationsService {
+  // No-op tracer until `startTracing` registers a provider, so these spans cost nothing when disabled.
+  private readonly tracer = domainTracer();
+
   constructor(
     private readonly db: Database,
     private readonly config: AppConfig,
@@ -81,14 +86,26 @@ export class ReservationsService {
   ) {}
 
   private runTx<T>(label: string, work: (client: Queryable) => Promise<T>): Promise<T> {
-    const policy = { ...retryPolicyFrom(this.config), label };
-    return runWithTransientRetry(policy, () =>
-      withTransaction(
-        this.db,
-        { label, isolation: ISOLATION_LEVELS.readCommitted, timeouts: timeoutsFrom(this.config) },
-        (sqlClient) => work(asQueryable(sqlClient)),
-      ),
-    );
+    // One span per business transaction (create/cancel/checkout), labelled by the bounded `label` — never
+    // by a reservation id — so the trace view groups the linearization points without unbounded cardinality.
+    return this.tracer.startActiveSpan(`db.tx.${label}`, async (span) => {
+      span.setAttribute('db.tx.label', label);
+      try {
+        const policy = { ...retryPolicyFrom(this.config), label };
+        return await runWithTransientRetry(policy, () =>
+          withTransaction(
+            this.db,
+            { label, isolation: ISOLATION_LEVELS.readCommitted, timeouts: timeoutsFrom(this.config) },
+            (sqlClient) => work(asQueryable(sqlClient)),
+          ),
+        );
+      } catch (error) {
+        span.recordException(error as Error);
+        throw error;
+      } finally {
+        span.end();
+      }
+    });
   }
 
   // ---------------------------------------------------------------- create ----
@@ -126,6 +143,10 @@ export class ReservationsService {
     });
 
     return this.runTx('reserve.atomic_update', async (client) => {
+      // Attributes the linearization point for this trace (a span may carry high-cardinality ids; a
+      // metric label may not — that rule lives in metrics.ts, not here).
+      trace.getActiveSpan()?.setAttribute('reservation.strategy', strategy);
+      trace.getActiveSpan()?.setAttribute('reservation.tier_id', request.tierId);
       const acquisition = await acquireIdempotency(client, {
         scopeUserId: user.id,
         scopeEndpoint: ENDPOINT_CREATE,

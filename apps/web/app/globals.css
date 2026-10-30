@@ -7,7 +7,9 @@
  * components carry no `dark:` duplication for core surfaces. The `dark` class is applied by an inline
  * script in the root layout before paint (no flash) and toggled by <ThemeToggle/> which persists the
  * choice to localStorage. Accent/state tokens also switch, so a single `text-ok`/`bg-ok/10` reads
- * correctly in both modes.
+ * correctly in both modes. Elevation (shadow tokens), a layered ambient background, custom
+ * scrollbars, text selection, and a guarded theme-crossfade are all defined once here so every page
+ * inherits a single, deliberate visual language instead of re-deriving it per component.
  */
 @custom-variant dark (&:where(.dark, .dark *));
 
@@ -16,6 +18,7 @@
   --panel: #ffffff;
   --elevated: #eef2f8;
   --edge: #e2e8f0;
+  --edge-strong: #cbd5e1;
   --ink: #0f1b2d;
   --muted: #5b6b82;
   --brand: #4f46e5;
@@ -25,13 +28,23 @@
   --warn: #b45309;
   --danger: #b91c1c;
   --info: #1d4ed8;
+
+  /* Ambient mesh glows behind the whole app; very low alpha so surfaces stay readable. */
+  --glow-a: rgba(79, 70, 229, 0.10);
+  --glow-b: rgba(124, 58, 237, 0.08);
+
+  /* Elevation scale — one shadow recipe for the whole product. */
+  --shadow-sm: 0 1px 2px 0 rgb(15 27 45 / 0.05), 0 1px 3px 0 rgb(15 27 45 / 0.04);
+  --shadow-md: 0 4px 12px -2px rgb(15 27 45 / 0.08), 0 2px 6px -2px rgb(15 27 45 / 0.05);
+  --shadow-lg: 0 16px 40px -12px rgb(15 27 45 / 0.18), 0 4px 12px -4px rgb(15 27 45 / 0.08);
 }
 
 .dark {
-  --app: #0a0f1c;
-  --panel: #101a2e;
-  --elevated: #0b1322;
+  --app: #070b16;
+  --panel: #0f1a2e;
+  --elevated: #16233b;
   --edge: #223148;
+  --edge-strong: #33456180;
   --ink: #e6edf6;
   --muted: #93a4bc;
   --brand: #6366f1;
@@ -41,6 +54,13 @@
   --warn: #fbbf24;
   --danger: #f87171;
   --info: #60a5fa;
+
+  --glow-a: rgba(99, 102, 241, 0.16);
+  --glow-b: rgba(167, 139, 250, 0.12);
+
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.35), 0 1px 3px 0 rgb(0 0 0 / 0.25);
+  --shadow-md: 0 4px 14px -3px rgb(0 0 0 / 0.5), 0 2px 6px -3px rgb(0 0 0 / 0.35);
+  --shadow-lg: 0 20px 44px -14px rgb(0 0 0 / 0.65), 0 6px 16px -6px rgb(0 0 0 / 0.45);
 }
 
 @theme inline {
@@ -48,6 +68,7 @@
   --color-panel: var(--panel);
   --color-elevated: var(--elevated);
   --color-edge: var(--edge);
+  --color-edge-strong: var(--edge-strong);
   --color-ink: var(--ink);
   --color-muted: var(--muted);
   --color-brand: var(--brand);
@@ -62,13 +83,33 @@
   --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', 'Cascadia Code', Menlo, Consolas, monospace;
 
   --radius-xl2: 1.25rem;
+
+  /* Shadow utilities: shadow-1 / shadow-2 / shadow-3 map to the elevation scale above. */
+  --shadow-1: var(--shadow-sm);
+  --shadow-2: var(--shadow-md);
+  --shadow-3: var(--shadow-lg);
+
+  /* Named animation used by the shell for a slow ambient drift on the background glows. */
+  --animate-float: float 18s ease-in-out infinite;
+}
+
+/* A barely-there drift: a few pixels of lift and a hair of scale over 18s, so the backdrop feels
+   alive without ever pulling the eye from data. Neutralised by the reduced-motion rule below. */
+@keyframes float {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(0, -10px, 0) scale(1.03);
+  }
 }
 
 /* One focus style for the whole app: keyboard users must always see where they are. */
 :where(a, button, input, select, textarea):focus-visible {
   outline: 2px solid var(--brand);
   outline-offset: 2px;
-  border-radius: 6px;
+  border-radius: 8px;
 }
 
 html {
@@ -79,12 +120,76 @@ body {
   background-color: var(--app);
   color: var(--ink);
   font-family: var(--font-sans);
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'ss01';
+  text-rendering: optimizeLegibility;
+}
+
+/*
+ * Ambient backdrop: two soft radial glows fixed to the viewport behind all content. Purely
+ * decorative (aria-hidden by construction, pointer-events-none), theme-aware through the glow vars,
+ * and never carries data — so it cannot misrepresent anything. Kept on the body::before so pages do
+ * not each reinvent a gradient.
+ */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  /* -1 keeps the glow above the body background but below all (auto/positioned) content, so no page
+     has to opt into a stacking context just to stay readable. */
+  z-index: -1;
+  pointer-events: none;
+  will-change: transform;
+  animation: var(--animate-float);
+  background:
+    radial-gradient(55rem 40rem at 12% -8%, var(--glow-a), transparent 60%),
+    radial-gradient(48rem 38rem at 105% 0%, var(--glow-b), transparent 55%);
+}
+
+/* Crossfade surfaces when the theme flips, but only for the one-shot toggle (guarded by the class). */
+.tf-theme-transition,
+.tf-theme-transition * {
+  transition: background-color 0.28s ease, border-color 0.28s ease, color 0.2s ease !important;
+}
+
+/* Type scale helpers so headings stay consistent without repeating long class strings. */
+.tf-h1 {
+  font-size: 1.75rem;
+  line-height: 1.15;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+.tf-lead {
+  font-size: 0.875rem;
+  line-height: 1.55rem;
+  color: var(--muted);
 }
 
 /* Hairline scrollbars inside data tables read as deliberate, not broken, in both themes. */
 .tf-scroll {
   scrollbar-width: thin;
-  scrollbar-color: var(--edge) transparent;
+  scrollbar-color: var(--edge-strong) transparent;
+}
+.tf-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.tf-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.tf-scroll::-webkit-scrollbar-thumb {
+  background-color: var(--edge-strong);
+  border-radius: 9999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+.tf-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: var(--muted);
+}
+
+/* Text selection uses the brand hue so highlighting feels intentional. */
+::selection {
+  background-color: color-mix(in srgb, var(--brand) 22%, transparent);
+  color: var(--ink);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -92,6 +197,7 @@ body {
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
 }
